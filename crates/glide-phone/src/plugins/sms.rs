@@ -16,6 +16,8 @@ pub const PACKET_TYPE_SMS_REQUEST_CONVERSATION: &str = "kdeconnect.sms.request_c
 /// `Telephony.Sms.MESSAGE_TYPE_INBOX`.
 pub const TYPE_INBOX: i64 = 1;
 const MAX_PER_THREAD: usize = 500;
+/// Conversations kept per phone.
+pub const MAX_THREADS: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
@@ -70,6 +72,17 @@ impl Inbox {
         let Some(list) = body.get("messages").and_then(Json::as_array) else { return Vec::new() };
         let mut fresh = Vec::new();
         for message in list.iter().filter_map(Message::from_json) {
+            if !self.threads.contains_key(&message.thread) && self.threads.len() >= MAX_THREADS {
+                // Make room by dropping the conversation that was quiet the longest.
+                let stalest = self
+                    .threads
+                    .iter()
+                    .min_by_key(|(_, messages)| messages.last().map_or(i64::MIN, |m| m.date))
+                    .map(|(id, _)| *id);
+                if let Some(id) = stalest {
+                    self.threads.remove(&id);
+                }
+            }
             let thread = self.threads.entry(message.thread).or_default();
             if thread.iter().any(|m| m.uid == message.uid) {
                 continue;

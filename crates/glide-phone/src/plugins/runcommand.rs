@@ -107,6 +107,10 @@ impl Commands {
         }
         let running = self.running.clone();
         tokio::spawn(async move {
+            if running.lock().await.len() >= MAX_RUNNING {
+                tracing::warn!("too many phone commands running; ignoring another");
+                return;
+            }
             let id = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
             let send = |body: serde_json::Value| {
                 if let Some(sender) = &sender {
@@ -121,6 +125,8 @@ impl Commands {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .kill_on_drop(true)
+                // Own process group, so "stop" ends the command's children too.
+                .process_group(0)
                 .spawn();
             let Ok(mut child) = child else {
                 send(json!({ "commandFinished": true, "id": id, "success": false }));
@@ -132,8 +138,9 @@ impl Commands {
             let stdout = child.stdout.take().map(|out| BufReader::new(out).lines());
             let stderr = child.stderr.take().map(|err| BufReader::new(err).lines());
             tokio::join!(pump(stdout, sender.clone(), id, "stdout"), pump(stderr, sender.clone(), id, "stderr"));
-            let success = child.wait().await.is_ok_and(|status| status.success());
+            // Forget the pid before reaping, so stop never signals a reused one.
             running.lock().await.remove(&id);
+            let success = child.wait().await.is_ok_and(|status| status.success());
             send(json!({ "commandFinished": true, "id": id, "success": success }));
         });
     }
@@ -147,9 +154,10 @@ impl Commands {
         tokio::spawn(async move {
             for pid in running.lock().await.values() {
                 if let Ok(pid) = i32::try_from(*pid) {
-                    // SAFETY: plain kill(2) on a child process id we spawned.
+                    // SAFETY: kill(2) on the process group of a child we spawned and haven't
+                    // reaped yet (it leaves `running` before wait() reaps it).
                     unsafe {
-                        libc::kill(pid, libc::SIGTERM);
+                        libc::kill(-pid, libc::SIGTERM);
                     }
                 }
             }
@@ -157,12 +165,30 @@ impl Commands {
     }
 }
 
+const MAX_RUNNING: usize = 8;
+const MAX_LINES: usize = 5000;
+const MAX_LINE_BYTES: usize = 4096;
+
 /// Forwards each output line as its own `commandOutput` packet.
 async fn pump<R: tokio::io::AsyncRead + Unpin>(
     lines: Option<tokio::io::Lines<BufReader<R>>>, sender: Option<PacketSender>, id: u32, stream: &str,
 ) {
     let Some(mut lines) = lines else { return };
-    while let Ok(Some(line)) = lines.next_line().await {
+    let mut sent = 0;
+    while let Ok(Some(mut line)) = lines.next_line().await {
+        // Keep reading (so the command doesn't block on a full pipe) but forward a bounded
+        // amount: at most MAX_LINES lines of MAX_LINE_BYTES each.
+        sent += 1;
+        if sent > MAX_LINES {
+            continue;
+        }
+        if line.len() > MAX_LINE_BYTES {
+            let mut end = MAX_LINE_BYTES;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
+        }
         if let Some(sender) = &sender {
             let _ = sender.send(NetworkPacket::new(
                 PACKET_TYPE_RUNCOMMAND_OUTPUT,
