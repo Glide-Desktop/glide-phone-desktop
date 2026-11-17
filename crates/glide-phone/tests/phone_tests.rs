@@ -1178,3 +1178,55 @@ fn a_shared_file_is_announced_like_kde_connect() {
     assert_eq!(packet.payload_transfer_info.as_ref().unwrap()["port"], 1740);
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[tokio::test]
+async fn the_phone_lists_runs_and_reads_the_output_of_commands() {
+    use glide_phone::plugins::runcommand::{
+        Commands, PACKET_TYPE_RUNCOMMAND, PACKET_TYPE_RUNCOMMAND_OUTPUT, PACKET_TYPE_RUNCOMMAND_REQUEST,
+    };
+    let dir = std::env::temp_dir().join(format!("glide-commands-{}", std::process::id()));
+    let path = dir.join("phone-commands.json");
+    let mut commands = Commands::load(Some(path.clone()));
+    let key = commands.add("Привіт", "echo hello; echo oops >&2; exit 3");
+
+    // The list survives a restart and is sent as a JSON string like KDE Connect does.
+    let reloaded = Commands::load(Some(path));
+    let list = reloaded.list_packet();
+    assert_eq!(list.packet_type, PACKET_TYPE_RUNCOMMAND);
+    let parsed: serde_json::Value = serde_json::from_str(list.body["commandList"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed[&key]["name"], "Привіт");
+    assert_eq!(list.body["canAddCommand"], true);
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let ask = |body| NetworkPacket::new(PACKET_TYPE_RUNCOMMAND_REQUEST, body);
+    assert!(!reloaded.handle_request(&ask(json!({"requestCommandList": true})), Some(&tx)));
+    assert_eq!(rx.recv().await.unwrap().packet_type, PACKET_TYPE_RUNCOMMAND);
+    assert!(reloaded.handle_request(&ask(json!({"setup": true})), Some(&tx)));
+
+    reloaded.handle_request(&ask(json!({"key": key})), Some(&tx));
+    let mut started = false;
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let finished = loop {
+        let packet = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+        assert_eq!(packet.packet_type, PACKET_TYPE_RUNCOMMAND_OUTPUT);
+        let body = packet.body;
+        if body["commandStarted"] == true {
+            started = true;
+        }
+        if let Some(lines) = body["stdout"].as_array() {
+            out.extend(lines.iter().map(|l| l.as_str().unwrap().to_string()));
+        }
+        if let Some(lines) = body["stderr"].as_array() {
+            err.extend(lines.iter().map(|l| l.as_str().unwrap().to_string()));
+        }
+        if body["commandFinished"] == true {
+            break body;
+        }
+    };
+    assert!(started);
+    assert_eq!(out, ["hello"]);
+    assert_eq!(err, ["oops"]);
+    assert_eq!(finished["success"], false);
+    commands.remove(&key);
+    std::fs::remove_dir_all(dir).ok();
+}

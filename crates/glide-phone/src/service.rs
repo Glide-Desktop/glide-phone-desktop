@@ -109,8 +109,11 @@ impl PhoneService {
                 "kdeconnect.share.request".to_string(),
                 "kdeconnect.findmyphone.request".to_string(),
                 "kdeconnect.ping".to_string(),
+                "kdeconnect.runcommand.request".to_string(),
             ],
             outgoing_capabilities: vec![
+                "kdeconnect.runcommand".to_string(),
+                "kdeconnect.runcommand.output".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
                 "kdeconnect.notification.reply".to_string(),

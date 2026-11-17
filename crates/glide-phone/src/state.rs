@@ -65,6 +65,9 @@ pub struct PhoneManager {
     connecting: HashMap<String, Instant>,
     clipboard: Option<(String, i64)>,
     presenter_events: VecDeque<(String, PresenterEvent)>,
+    pub commands: crate::plugins::runcommand::Commands,
+    /// Set when a phone asked to set commands up here; the window opens that section.
+    pub commands_setup_requested: bool,
     pub notify: Arc<Notify>,
 }
 
@@ -78,6 +81,7 @@ impl PhoneManager {
             }
             pinned
         });
+        let commands_path = config.config_path.as_ref().map(|path| path.with_file_name("phone-commands.json"));
         let mut devices = HashMap::new();
         for (id, paired) in &config.paired_devices {
             devices.insert(
@@ -104,6 +108,8 @@ impl PhoneManager {
             connecting: HashMap::new(),
             clipboard: None,
             presenter_events: VecDeque::new(),
+            commands: crate::plugins::runcommand::Commands::load(commands_path),
+            commands_setup_requested: false,
             notify: Arc::new(Notify::new()),
         }
     }
@@ -181,8 +187,53 @@ impl PhoneManager {
                 dev.peer_fingerprint = Some(fp);
             }
         }
+        if self.is_paired(&device_id) {
+            for packet in self.greeting() {
+                let _ = sender.send(packet);
+            }
+        }
         self.senders.insert(device_id, sender);
         self.notify.notify_waiters();
+    }
+
+    /// What our plugins send when a paired phone connects (their `onCreate` in KDE Connect).
+    fn greeting(&self) -> Vec<NetworkPacket> {
+        vec![self.commands.list_packet()]
+    }
+
+    pub fn greet(&self, device_id: &str) {
+        for packet in self.greeting() {
+            self.send_to_device(device_id, packet);
+        }
+    }
+
+    /// Commands changed here: every connected phone gets the new list.
+    fn broadcast_commands(&self) {
+        let packet = self.commands.list_packet();
+        for (id, sender) in &self.senders {
+            if self.is_paired(id) {
+                let _ = sender.send(packet.clone());
+            }
+        }
+    }
+
+    pub fn add_command(&mut self, name: &str, command: &str) -> Option<String> {
+        if name.trim().is_empty() || command.trim().is_empty() {
+            return None;
+        }
+        let key = self.commands.add(name, command);
+        self.broadcast_commands();
+        self.notify.notify_waiters();
+        Some(key)
+    }
+
+    pub fn remove_command(&mut self, key: &str) -> bool {
+        let removed = self.commands.remove(key);
+        if removed {
+            self.broadcast_commands();
+            self.notify.notify_waiters();
+        }
+        removed
     }
 
     #[must_use]
@@ -319,6 +370,7 @@ impl PhoneManager {
             self.config.paired_devices.insert(device_id.to_string(), paired);
             self.config.save_if_configured();
             self.send_to_device(device_id, create_request_packet());
+            self.greet(device_id);
         } else if pair.timestamp.is_some()
             && !matches!(device.pair_state, PairState::Paired | PairState::RequestedByPeer)
         {
@@ -379,6 +431,13 @@ impl PhoneManager {
                 }
                 true
             }
+            crate::plugins::runcommand::PACKET_TYPE_RUNCOMMAND_REQUEST => {
+                if self.commands.handle_request(packet, self.senders.get(device_id)) {
+                    self.commands_setup_requested = true;
+                    self.notify.notify_waiters();
+                }
+                true
+            }
             PACKET_TYPE_SHARE_REQUEST => {
                 if let Ok(share) = handle_share_packet(packet) {
                     crate::plugins::share::deliver(device_name, share);
@@ -431,6 +490,7 @@ impl PhoneManager {
         self.send_to_device(device_id, packet.clone());
         if is_now_paired {
             self.send_to_device(device_id, create_request_packet());
+            self.greet(device_id);
         }
         self.notify.notify_waiters();
         Ok(packet)

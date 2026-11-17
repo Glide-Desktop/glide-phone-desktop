@@ -25,6 +25,10 @@ pub fn global_manager() -> Option<&'static Arc<Mutex<PhoneManager>>> {
     GLOBAL_MANAGER.get()
 }
 
+pub(crate) fn proxy() -> Option<PhoneDaemonProxyBlocking<'static>> {
+    get_proxy()
+}
+
 fn get_proxy() -> Option<PhoneDaemonProxyBlocking<'static>> {
     static PROXY: OnceLock<Option<PhoneDaemonProxyBlocking<'static>>> = OnceLock::new();
     PROXY
@@ -58,6 +62,7 @@ pub struct PhoneApp {
     pub selected: Option<String>,
     pub ringing_local: bool,
     refreshing: bool,
+    pub panels: crate::panels::Panels,
 }
 
 #[derive(Debug, Clone)]
@@ -71,21 +76,46 @@ pub enum Message {
     ClearNotifications(String),
     SendFiles(String),
     FilesChosen(String, Vec<std::path::PathBuf>),
+    Panel(crate::panels::PanelMessage),
     Refresh,
     Loaded(Option<Snapshot>),
 }
 
-type Snapshot = Option<(Vec<PhoneCardData>, bool)>;
+/// Everything the window shows, read from the daemon twice a second.
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    pub cards: Vec<PhoneCardData>,
+    pub ringing: bool,
+    pub commands: Vec<crate::panels::CommandRow>,
+    pub setup_requested: bool,
+}
+
+type Snapshot = Option<State>;
 
 fn snapshot() -> Snapshot {
     if let Some(proxy) = get_proxy()
         && let Ok(json) = proxy.list_devices_json()
         && let Ok(cards) = serde_json::from_str::<Vec<PhoneCardData>>(&json)
     {
-        return Some((cards, proxy.is_ringing().unwrap_or(false)));
+        return Some(State {
+            cards,
+            ringing: proxy.is_ringing().unwrap_or(false),
+            commands: proxy
+                .list_commands_json()
+                .ok()
+                .map(|json| crate::panels::command_rows_from_json(&json))
+                .unwrap_or_default(),
+            setup_requested: proxy.take_commands_setup().unwrap_or(false),
+        });
     }
-    let guard = global_manager()?.try_lock().ok()?;
-    Some((guard.sorted_cards(), guard.is_ringing()))
+    let mut guard = global_manager()?.try_lock().ok()?;
+    let setup_requested = std::mem::take(&mut guard.commands_setup_requested);
+    Some(State {
+        cards: guard.sorted_cards(),
+        ringing: guard.is_ringing(),
+        commands: crate::panels::command_rows(&guard.commands.entries),
+        setup_requested,
+    })
 }
 
 fn off_thread<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = Option<T>> {
@@ -430,7 +460,16 @@ impl App for PhoneApp {
     type Message = Message;
 
     fn new(_shell: &mut Shell<Message>) -> (Self, Task<Message>) {
-        (Self { devices: Vec::new(), selected: None, ringing_local: false, refreshing: false }, Task::none())
+        (
+            Self {
+                devices: Vec::new(),
+                selected: None,
+                ringing_local: false,
+                refreshing: false,
+                panels: crate::panels::Panels::default(),
+            },
+            Task::none(),
+        )
     }
 
     fn title(&self, shell: &Shell<Message>) -> String {
@@ -521,6 +560,7 @@ impl App for PhoneApp {
             }
             Message::SendFiles(id) => return Self::choose_files(id, shell),
             Message::FilesChosen(id, paths) => Self::send_files(&id, paths, shell),
+            Message::Panel(message) => return self.panels.update(message),
             Message::Refresh => {
                 if !std::mem::replace(&mut self.refreshing, true) {
                     return Task::perform(off_thread(snapshot), Message::Loaded);
@@ -528,9 +568,14 @@ impl App for PhoneApp {
             }
             Message::Loaded(state) => {
                 self.refreshing = false;
-                if let Some((devices, ringing)) = state.flatten() {
-                    self.devices = devices;
-                    self.ringing_local = ringing;
+                if let Some(state) = state.flatten() {
+                    self.devices = state.cards;
+                    self.ringing_local = state.ringing;
+                    self.panels.commands = state.commands;
+                    if state.setup_requested {
+                        shell
+                            .toast(shell.t("Телефон просить налаштувати команди", "The phone asks to set up commands"));
+                    }
                 }
             }
         }
@@ -591,6 +636,10 @@ impl App for PhoneApp {
                 }
                 list_col = list_col.push(avail_group);
             }
+        }
+
+        for section in self.panels.view(shell) {
+            list_col = list_col.push(section);
         }
 
         let clamp =

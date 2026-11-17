@@ -111,6 +111,24 @@ impl PhoneDaemon {
         mgr.share_files(device_id, paths.into_iter().map(std::path::PathBuf::from).collect()).is_ok()
     }
 
+    pub async fn list_commands_json(&self) -> String {
+        let mgr = self.manager.lock().await;
+        serde_json::to_string(&mgr.commands.entries).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub async fn add_command(&self, name: &str, command: &str) -> bool {
+        self.manager.lock().await.add_command(name, command).is_some()
+    }
+
+    pub async fn remove_command(&self, key: &str) -> bool {
+        self.manager.lock().await.remove_command(key)
+    }
+
+    /// True once after a phone asked to set commands up here.
+    pub async fn take_commands_setup(&self) -> bool {
+        std::mem::take(&mut self.manager.lock().await.commands_setup_requested)
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

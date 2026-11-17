@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod find_device;
 pub mod notifications;
 pub mod presenter;
+pub mod runcommand;
 pub mod share;
 
 pub use battery::{BatteryPayload, BatteryState, handle_battery_packet, local_battery_packet};
