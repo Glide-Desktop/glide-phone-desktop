@@ -3,6 +3,7 @@ pub mod config;
 pub mod crypto;
 pub mod daemon;
 pub mod discovery;
+pub mod edge;
 pub mod i18n;
 pub mod input;
 pub mod link;

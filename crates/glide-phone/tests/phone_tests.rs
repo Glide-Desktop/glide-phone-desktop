@@ -1587,3 +1587,43 @@ fn a_paired_phone_that_went_away_is_called_back_where_it_was() {
     manager.unregister_connection("pinned", &sender.downgrade());
     assert_eq!(manager.away_paired_addresses(), [ip]);
 }
+
+#[test]
+fn the_cursor_goes_over_to_the_phone_at_the_edge_and_comes_back() {
+    use glide_phone::config::PairedDevice;
+    use glide_phone::edge::{Captured, Edge};
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    let mut drain = || std::iter::from_fn(|| sent.try_recv().ok()).collect::<Vec<_>>();
+    drain();
+
+    // Off: nothing happens at the edge.
+    manager.on_captured(&Captured::Entered { along: 10 });
+    assert!(drain().is_empty());
+
+    // On, but the phone doesn't take the cursor: nothing is sent to it either.
+    assert!(manager.set_share_input_edge(Some(Edge::Left)));
+    manager.on_captured(&Captured::Entered { along: 10 });
+    assert!(drain().is_empty());
+
+    // A phone that takes it gets where to enter, then the motion.
+    manager.remember_input_receiver("pinned", true);
+    manager.on_captured(&Captured::Entered { along: 300 });
+    manager.on_captured(&Captured::Motion { dx: -4.0, dy: 2.0 });
+    let got = drain();
+    assert_eq!(got[0].packet_type, "kdeconnect.shareinputdevices.request");
+    assert_eq!(got[0].body, json!({ "exitEdge": 2, "deltax": 0, "deltay": 300 }));
+    assert_eq!(got[1].packet_type, "kdeconnect.mousepad.request");
+    assert_eq!(got[1].body, json!({ "dx": -4.0, "dy": 2.0 }));
+
+    // The phone hands it back: further input stays here.
+    let back = NetworkPacket::new("kdeconnect.shareinputdevices", json!({ "releaseDeltax": 0, "releaseDeltay": 280 }));
+    manager.handle_packet("pinned", &back).expect("handled");
+    manager.on_captured(&Captured::Motion { dx: 1.0, dy: 1.0 });
+    assert!(drain().is_empty());
+    assert!(manager.set_share_input_edge(None));
+    assert_eq!(manager.share_input_edge(), None);
+}

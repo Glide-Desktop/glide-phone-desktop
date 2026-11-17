@@ -30,6 +30,9 @@ tracing-subscriber = { workspace = true }
 zbus.workspace = true
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+xkbcommon = "0.9"
 
 [dev-dependencies]
 glide-app = { workspace = true, features = ["test-bus"] }

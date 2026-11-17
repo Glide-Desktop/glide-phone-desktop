@@ -22,6 +22,8 @@ pub trait PhoneDaemon {
     fn browse_phone(&self, device_id: &str) -> zbus::Result<bool>;
     fn control_phone_input(&self, device_id: &str, body_json: &str) -> zbus::Result<bool>;
     fn ping(&self, device_id: &str) -> zbus::Result<bool>;
+    fn share_input_edge(&self) -> zbus::Result<String>;
+    fn set_share_input_edge(&self, edge: &str) -> zbus::Result<bool>;
     fn list_sms_json(&self) -> zbus::Result<String>;
     fn request_sms_conversations(&self, device_id: &str) -> zbus::Result<bool>;
     fn request_sms_thread(&self, device_id: &str, thread: i64) -> zbus::Result<bool>;

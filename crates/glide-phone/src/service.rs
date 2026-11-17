@@ -124,6 +124,7 @@ impl PhoneService {
                 "kdeconnect.sms.messages".to_string(),
                 "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.share.request.update".to_string(),
+                "kdeconnect.shareinputdevices".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -151,6 +152,8 @@ impl PhoneService {
                 "kdeconnect.findmyphone.request".to_string(),
                 "kdeconnect.ping".to_string(),
                 "kdeconnect.share.request".to_string(),
+                "kdeconnect.mousepad.request".to_string(),
+                "kdeconnect.shareinputdevices.request".to_string(),
             ],
         }
     }
@@ -330,6 +333,9 @@ impl PhoneService {
             return None;
         }
         mgr.register_connection(identity.device_id.clone(), sender, fingerprint);
+        let takes_cursor =
+            identity.incoming_capabilities.iter().any(|c| c == crate::edge::PACKET_TYPE_SHAREINPUTDEVICES_REQUEST);
+        mgr.remember_input_receiver(&identity.device_id, takes_cursor);
         mgr.send_pending_pair_request(&identity.device_id);
         let device = mgr.devices.get(&identity.device_id)?;
         Some((device.pair_state == PairState::Paired, device.name.clone()))

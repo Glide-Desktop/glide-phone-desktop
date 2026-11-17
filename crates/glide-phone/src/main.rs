@@ -144,6 +144,15 @@ fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex
         let manager = notification_manager.clone();
         tokio::spawn(async move { manager.lock().await.forward_desktop_notification(&notification) });
     }));
+    // The cursor going over to a phone at a screen edge (strip events -> the phone).
+    let edge_manager = manager.clone();
+    rt.spawn(async move {
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        edge_manager.lock().await.enable_share_input(events);
+        while let Some(event) = received.recv().await {
+            edge_manager.lock().await.on_captured(&event);
+        }
+    });
     let battery_manager = manager.clone();
     rt.spawn(glide_phone::plugins::battery::watch(move |packet| {
         let manager = battery_manager.clone();

@@ -34,6 +34,8 @@ pub struct Panels {
     pub sms_draft: String,
     pub draft_name: String,
     pub draft_command: String,
+    /// Where the cursor goes over to the phone ("" = off); read from the daemon once.
+    pub share_edge: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,8 @@ pub enum PanelMessage {
     CloseThread,
     SmsDraft(String),
     SendSms,
+    /// Off → left → right → top → bottom → off.
+    CycleShareEdge,
 }
 
 impl Panels {
@@ -128,6 +132,23 @@ impl Panels {
                 return Ok(
                     glide_sdk::iced::clipboard::read().map(|text| Message::Panel(PanelMessage::ClipboardRead(text)))
                 );
+            }
+            PanelMessage::CycleShareEdge => {
+                let current = self.share_edge.clone().unwrap_or_default();
+                let order = ["", "left", "right", "top", "bottom"];
+                let next = order[(order.iter().position(|e| *e == current).unwrap_or(0) + 1) % order.len()];
+                let ok = if let Some(proxy) = proxy() {
+                    proxy.set_share_input_edge(next).unwrap_or(false)
+                } else if let Some(manager) = global_manager()
+                    && let Ok(mut guard) = manager.try_lock()
+                {
+                    guard.set_share_input_edge(crate::edge::Edge::parse(next))
+                } else {
+                    false
+                };
+                if ok {
+                    self.share_edge = Some(next.to_string());
+                }
             }
             PanelMessage::ClipboardRead(text) => {
                 if let (Some(text), Some(device)) = (text.filter(|t| !t.is_empty()), self.reachable.first()) {
@@ -211,6 +232,16 @@ impl Panels {
 impl Panels {
     /// After each refresh: load names and, once per phone, ask for its conversations.
     pub fn refreshed(&mut self) {
+        if self.share_edge.is_none() {
+            self.share_edge = Some(if let Some(proxy) = proxy() {
+                proxy.share_input_edge().unwrap_or_default()
+            } else {
+                global_manager()
+                    .and_then(|m| m.try_lock().ok())
+                    .and_then(|g| g.share_input_edge())
+                    .map_or_else(String::new, |e| e.name().to_string())
+            });
+        }
         let Some(device) = self.reachable.first().cloned() else { return };
         self.names = crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(&device));
         if self.sms_asked.insert(device.clone()) {
@@ -456,6 +487,20 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
         ),
     ]
     .spacing(8);
+    // Moving the cursor past this screen edge carries it (and the keyboard) to the phone.
+    let edge_label = match panels.share_edge.as_deref().unwrap_or_default() {
+        "left" => shell.t("Курсор на телефон: зліва", "Cursor to the phone: left edge"),
+        "right" => shell.t("Курсор на телефон: справа", "Cursor to the phone: right edge"),
+        "top" => shell.t("Курсор на телефон: зверху", "Cursor to the phone: top edge"),
+        "bottom" => shell.t("Курсор на телефон: знизу", "Cursor to the phone: bottom edge"),
+        _ => shell.t("Курсор на телефон: вимкнено", "Cursor to the phone: off"),
+    };
+    let edge = row![
+        widget::compact_button(paint, edge_label, Tone::Neutral, Some(Message::Panel(PanelMessage::CycleShareEdge))),
+        glide_sdk::iced::widget::text(shell.t("Ctrl+Alt+Esc повертає курсор", "Ctrl+Alt+Esc brings it back")).size(12),
+    ]
+    .spacing(8)
+    .align_y(glide_sdk::iced::Alignment::Center);
     let keyboard_off = panels.reachable.first().and_then(|id| panels.keyboard_off.get(id)).copied().unwrap_or(false);
     let description = if keyboard_off {
         format!("{device} · {}", shell.t("клавіатура телефону зараз недоступна", "the phone's keyboard is unavailable"))
@@ -465,7 +510,7 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
     widget::Group::new(paint)
         .title(shell.t("Керувати телефоном", "Control the phone"))
         .description(description)
-        .push(column![pad, keys, typing, share].spacing(10))
+        .push(column![pad, keys, typing, share, edge].spacing(10))
         .into()
 }
 

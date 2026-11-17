@@ -155,6 +155,20 @@ impl PhoneDaemon {
         self.manager.lock().await.ping(device_id).is_ok()
     }
 
+    /// The screen edge where the cursor goes over to the phone ("" when off).
+    pub async fn share_input_edge(&self) -> String {
+        self.manager.lock().await.share_input_edge().map_or_else(String::new, |e| e.name().to_string())
+    }
+
+    /// "left", "right", "top", "bottom", or "" to turn it off; false if the strip can't be shown.
+    pub async fn set_share_input_edge(&self, edge: &str) -> bool {
+        let parsed = crate::edge::Edge::parse(edge);
+        if parsed.is_none() && !edge.is_empty() {
+            return false;
+        }
+        self.manager.lock().await.set_share_input_edge(parsed)
+    }
+
     /// The phones' messages: `{device id: inbox}`.
     pub async fn list_sms_json(&self) -> String {
         let mgr = self.manager.lock().await;

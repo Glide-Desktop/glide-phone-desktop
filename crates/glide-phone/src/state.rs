@@ -59,6 +59,21 @@ pub struct PhoneDeviceState {
     pub keyboard_off: bool,
 }
 
+/// The cursor going over to a phone at a screen edge (`shareinputdevices`).
+#[derive(Default)]
+struct ShareInput {
+    edge: Option<crate::edge::Edge>,
+    path: Option<std::path::PathBuf>,
+    /// Set by the daemon; the strip's events arrive here.
+    events: Option<tokio::sync::mpsc::UnboundedSender<crate::edge::Captured>>,
+    capture: Option<crate::edge::EdgeCapture>,
+    /// The phone that has the cursor now.
+    target: Option<String>,
+    translator: crate::edge::Translator,
+    /// Phones that accept `shareinputdevices.request` (from their identity).
+    receivers: std::collections::HashSet<String>,
+}
+
 pub struct PhoneManager {
     pub config: PhoneConfig,
     pub cert: IdentityCert,
@@ -76,6 +91,7 @@ pub struct PhoneManager {
     mousepad: crate::plugins::mousepad::Mousepad,
     typist: Option<crate::plugins::mousepad::Typist>,
     digitizer: Option<crate::plugins::digitizer::Digitizer>,
+    share_input: ShareInput,
     /// When we asked each phone for its files; its login is only used shortly after.
     browse_requested: HashMap<String, Instant>,
     /// Where each phone was last connected from (for unicast rediscovery).
@@ -100,6 +116,14 @@ impl PhoneManager {
             pinned
         });
         let commands_path = config.config_path.as_ref().map(|path| path.with_file_name("phone-commands.json"));
+        let share_input = {
+            let path = config.config_path.as_ref().map(|p| p.with_file_name("share-input-edge"));
+            let edge = path
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|name| crate::edge::Edge::parse(name.trim()));
+            ShareInput { edge, path, ..ShareInput::default() }
+        };
         let mut devices = HashMap::new();
         for (id, paired) in &config.paired_devices {
             devices.insert(
@@ -134,6 +158,7 @@ impl PhoneManager {
             sms: HashMap::new(),
             last_addresses: HashMap::new(),
             browse_requested: HashMap::new(),
+            share_input,
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
@@ -244,6 +269,110 @@ impl PhoneManager {
     }
 
     /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
+    /// Remembers whether a phone takes the cursor at a screen edge (its identity says so).
+    pub fn remember_input_receiver(&mut self, device_id: &str, accepts: bool) {
+        if accepts {
+            self.share_input.receivers.insert(device_id.to_string());
+        } else {
+            self.share_input.receivers.remove(device_id);
+        }
+    }
+
+    /// The screen edge the phone sits on, when sharing the cursor is on.
+    #[must_use]
+    pub fn share_input_edge(&self) -> Option<crate::edge::Edge> {
+        self.share_input.edge
+    }
+
+    /// Turns sharing the cursor on at `edge` (or off) and remembers it.
+    pub fn set_share_input_edge(&mut self, edge: Option<crate::edge::Edge>) -> bool {
+        self.share_input.edge = edge;
+        if let Some(path) = &self.share_input.path {
+            let text = edge.map_or("", crate::edge::Edge::name);
+            let _ = glide_config::write_atomic(path, text.as_bytes(), 0o600);
+        }
+        self.apply_share_input();
+        self.notify.notify_waiters();
+        edge.is_none() || self.share_input.events.is_none() || self.share_input.capture.is_some()
+    }
+
+    /// The daemon's side: strip events go to `events` (the window never starts a strip).
+    pub fn enable_share_input(&mut self, events: tokio::sync::mpsc::UnboundedSender<crate::edge::Captured>) {
+        self.share_input.events = Some(events);
+        self.apply_share_input();
+    }
+
+    fn apply_share_input(&mut self) {
+        self.end_share_input();
+        self.share_input.capture = None; // removes the old strip
+        let (Some(edge), Some(events)) = (self.share_input.edge, self.share_input.events.clone()) else { return };
+        self.share_input.capture = crate::edge::EdgeCapture::start(edge, move |event| {
+            let _ = events.send(event);
+        });
+        if self.share_input.capture.is_none() {
+            tracing::warn!(
+                "cannot put the cursor strip on the screen edge (needs layer-shell and pointer constraints)"
+            );
+        }
+    }
+
+    /// Something happened at the strip: forward it to the phone that has the cursor.
+    pub fn on_captured(&mut self, event: &crate::edge::Captured) {
+        let Some(edge) = self.share_input.edge else { return };
+        if let crate::edge::Captured::Entered { along } = event {
+            // The phone that had it last, else the first connected one that takes it.
+            let usable = |id: &String| self.senders.contains_key(id) && self.is_paired(id);
+            let target = self
+                .share_input
+                .target
+                .clone()
+                .filter(usable)
+                .or_else(|| self.share_input.receivers.iter().filter(|id| usable(id)).min().cloned());
+            let Some(target) = target else {
+                // Nobody to take it: give the cursor straight back.
+                if let Some(capture) = &self.share_input.capture {
+                    capture.release(*along);
+                }
+                return;
+            };
+            self.share_input.target = Some(target);
+        }
+        if matches!(event, crate::edge::Captured::TakenBack) {
+            self.share_input.target = None;
+            return;
+        }
+        let Some(target) = self.share_input.target.clone() else { return };
+        for packet in self.share_input.translator.packets(event, edge) {
+            self.send_to_device(&target, packet);
+        }
+    }
+
+    /// The phone gave the cursor back (`kdeconnect.shareinputdevices`).
+    fn on_input_returned(&mut self, device_id: &str, body: &serde_json::Value) {
+        if self.share_input.target.as_deref() != Some(device_id) {
+            return;
+        }
+        self.share_input.target = None;
+        let key = if matches!(self.share_input.edge, Some(crate::edge::Edge::Left | crate::edge::Edge::Right)) {
+            "releaseDeltay"
+        } else {
+            "releaseDeltax"
+        };
+        let along = body.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+        if let Some(capture) = &self.share_input.capture {
+            capture.release(i32::try_from(along.clamp(0, 100_000)).unwrap_or(0));
+        }
+    }
+
+    /// Hands the cursor back to this computer if a phone has it.
+    fn end_share_input(&mut self) {
+        if self.share_input.target.take().is_some()
+            && let Some(capture) = &self.share_input.capture
+        {
+            capture.release(0);
+        }
+    }
+
     pub fn enable_remote_input(&mut self) {
         self.remote_input = crate::input::RemoteInput::available();
         if !self.remote_input {
@@ -431,6 +560,9 @@ impl PhoneManager {
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
+        if self.share_input.target.as_deref() == Some(device_id) {
+            self.end_share_input(); // a phone that went away can't give the cursor back
+        }
         if tokio::runtime::Handle::try_current().is_ok() {
             let id = device_id.to_string();
             tokio::spawn(async move { crate::plugins::sftp::unmount(&id).await });
@@ -678,6 +810,10 @@ impl PhoneManager {
     /// Drawing tablet, keyboard state and share batch updates.
     fn handle_input_packet(&mut self, device_id: &str, packet: &NetworkPacket) -> bool {
         match packet.packet_type.as_str() {
+            crate::edge::PACKET_TYPE_SHAREINPUTDEVICES => {
+                self.on_input_returned(device_id, &packet.body);
+                true
+            }
             crate::plugins::digitizer::PACKET_TYPE_DIGITIZER_SESSION if self.remote_input => {
                 if let Some(session) = crate::plugins::digitizer::parse_session(&packet.body) {
                     self.digitizer.get_or_insert_with(crate::plugins::digitizer::Digitizer::start).session(session);
