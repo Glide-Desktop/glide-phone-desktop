@@ -1451,3 +1451,32 @@ async fn the_phones_players_are_mirrored_and_driven_from_this_computer() {
     };
     assert_eq!(request.body, json!({"action": "PlayPause", "player": "Spotify"}));
 }
+
+#[tokio::test]
+async fn this_computers_notifications_are_picked_up_for_the_phone() {
+    use glide_phone::plugins::send_notifications::watch_bus;
+    let Some(bus) = glide_app::test_bus::private_bus() else { return };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(watch_bus(Some(bus.address.clone()), move |n| {
+        let _ = tx.send(n);
+    }));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let app = zbus::connection::Builder::address(bus.address.as_str()).unwrap().build().await.unwrap();
+    let hints: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> = std::collections::HashMap::new();
+    for (name, summary) in [("glide-phone", "from the phone"), ("Firefox", "Завантажено")] {
+        // Nobody serves the name on this bus; the monitor still sees the call.
+        let _ = app
+            .call_method(
+                Some("org.freedesktop.Notifications"),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.Notifications"),
+                "Notify",
+                &(name, 0u32, "", summary, "файл.zip", Vec::<&str>::new(), &hints, -1i32),
+            )
+            .await;
+    }
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await.expect("seen").unwrap();
+    assert_eq!(got.app, "Firefox");
+    assert_eq!(got.summary, "Завантажено");
+    assert!(rx.try_recv().is_err(), "our own notification is not forwarded");
+}

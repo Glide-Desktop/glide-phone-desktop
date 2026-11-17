@@ -253,6 +253,43 @@ impl PhoneManager {
         });
     }
 
+    /// A desktop notification for the phones; with a PNG icon it goes as a payload.
+    pub fn forward_desktop_notification(&self, notification: &crate::plugins::send_notifications::DesktopNotification) {
+        let packet = crate::plugins::send_notifications::packet(notification);
+        let icon = notification.icon.clone().filter(|_| tokio::runtime::Handle::try_current().is_ok());
+        for id in self.senders.keys().filter(|id| self.is_paired(id)) {
+            let Some(sender) = self.senders.get(id).cloned() else { continue };
+            let Some(path) = icon.clone() else {
+                let _ = sender.send(packet.clone());
+                continue;
+            };
+            let (cert, fingerprint) =
+                (self.cert.clone(), self.devices.get(id).and_then(|d| d.peer_fingerprint.clone()));
+            let mut packet = packet.clone();
+            tokio::spawn(async move {
+                let bytes = tokio::fs::read(&path).await.ok().filter(|b| b.len() <= 1024 * 1024);
+                let listener = match &bytes {
+                    Some(_) => crate::payload::PayloadListener::bind(&cert, fingerprint).await.ok(),
+                    None => None,
+                };
+                if let (Some(bytes), Some(listener)) = (bytes, listener) {
+                    crate::payload::attach(&mut packet, bytes.len() as u64, listener.port());
+                    if sender.send(packet).is_ok() {
+                        listener
+                            .serve(
+                                std::io::Cursor::new(bytes.clone()),
+                                bytes.len() as u64,
+                                crate::payload::ACCEPT_TIMEOUT,
+                            )
+                            .await;
+                    }
+                } else {
+                    let _ = sender.send(packet);
+                }
+            });
+        }
+    }
+
     /// Sends `packet` to every connected, paired phone.
     pub fn broadcast(&self, packet: &NetworkPacket) {
         for (id, sender) in &self.senders {
