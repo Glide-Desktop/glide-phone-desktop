@@ -1680,3 +1680,50 @@ fn the_top_bar_applet_sees_every_battery_change() {
     manager.handle_packet("pixel", &battery(41, false)).expect("battery");
     assert_eq!(shown(&manager), Some(("pixel".into(), Some(41), false)), "the connected phone, its new level");
 }
+
+/// Found against the real KDE Connect Android: `ShareFiles` over D-Bus panicked ("no reactor
+/// running") because zbus ran handlers on its own thread. They now run on tokio.
+#[tokio::test(flavor = "multi_thread")]
+async fn files_can_be_shared_over_dbus() {
+    use glide_phone::config::PairedDevice;
+    use glide_phone::daemon::start_dbus_service_on;
+    let Some(bus) = glide_app::test_bus::private_bus() else { return };
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let manager =
+        std::sync::Arc::new(tokio::sync::Mutex::new(PhoneManager::new(local_config(&cert, vec![paired]), cert)));
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.lock().await.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    let builder = || zbus::connection::Builder::address(bus.address.as_str()).unwrap();
+    let _daemon = start_dbus_service_on(builder(), manager.clone()).await.expect("daemon");
+    let client = builder().build().await.expect("client");
+    let file = std::env::temp_dir().join(format!("glide-dbus-share-{}.txt", std::process::id()));
+    std::fs::write(&file, b"hello").unwrap();
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.call_method(
+            Some("org.glide.Phone"),
+            "/org/glide/Phone",
+            Some("org.glide.Phone"),
+            "ShareFiles",
+            &("pinned", vec![file.to_string_lossy().into_owned()]),
+        ),
+    )
+    .await
+    .expect("an answer, not a hang")
+    .expect("call");
+    assert!(reply.body().deserialize::<bool>().unwrap());
+    let packet = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(p) = sent.recv().await
+                && p.packet_type == "kdeconnect.share.request"
+            {
+                return p;
+            }
+        }
+    })
+    .await
+    .expect("the file is offered to the phone");
+    assert_eq!(packet.payload_size, Some(5));
+    let _ = std::fs::remove_file(&file);
+}

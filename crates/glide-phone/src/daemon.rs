@@ -216,7 +216,17 @@ pub async fn start_dbus_service_on(
 ) -> Result<connection::Connection, Box<dyn std::error::Error + Send + Sync>> {
     let daemon = PhoneDaemon::new(manager.clone());
 
-    let conn = builder.serve_at(OBJECT_PATH, daemon)?.build().await?;
+    // Method calls run on tokio (not zbus' own executor thread), so handlers that spawn
+    // tasks or check for a runtime — sharing files, running commands — work over D-Bus.
+    let conn = builder.serve_at(OBJECT_PATH, daemon)?.internal_executor(false).build().await?;
+    {
+        let conn = conn.clone();
+        tokio::spawn(async move {
+            loop {
+                conn.executor().tick().await;
+            }
+        });
+    }
     let reply = conn.request_name_with_flags(BUS_NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into()).await?;
     if !matches!(reply, zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner) {
         return Err(format!("{BUS_NAME} is already owned ({reply:?})").into());
