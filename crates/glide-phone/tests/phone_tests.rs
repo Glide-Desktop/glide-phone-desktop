@@ -1480,3 +1480,22 @@ async fn this_computers_notifications_are_picked_up_for_the_phone() {
     assert_eq!(got.summary, "Завантажено");
     assert!(rx.try_recv().is_err(), "our own notification is not forwarded");
 }
+
+#[test]
+fn this_computer_drives_the_phone_and_pings_it() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    assert!(manager.control_phone_input("pinned", json!({"dx": 1})).is_err(), "not connected yet");
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    while sent.try_recv().is_ok() {}
+    manager.control_phone_input("pinned", json!({"key": "Привіт"})).unwrap();
+    let packet = sent.try_recv().unwrap();
+    assert_eq!(packet.packet_type, "kdeconnect.mousepad.request");
+    assert_eq!(packet.body["key"], "Привіт");
+    assert!(manager.control_phone_input("pinned", json!("not an object")).is_err());
+    manager.ping("pinned").unwrap();
+    assert_eq!(sent.try_recv().unwrap().packet_type, "kdeconnect.ping");
+}

@@ -310,6 +310,27 @@ impl PhoneManager {
         }
     }
 
+    /// Drives the phone's pointer or keyboard (`kdeconnect.mousepad.request` to the phone).
+    pub fn control_phone_input(
+        &self, device_id: &str, body: serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        if !body.is_object() {
+            return Err("not a request".into());
+        }
+        self.send_to_device(
+            device_id,
+            NetworkPacket::new(crate::plugins::mousepad::PACKET_TYPE_MOUSEPAD_REQUEST, body),
+        );
+        Ok(())
+    }
+
+    pub fn ping(&self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        self.send_to_device(device_id, NetworkPacket::new(PACKET_TYPE_PING, serde_json::json!({})));
+        Ok(())
+    }
+
     /// Asks the phone for its files (they open once it answers).
     pub fn browse_phone(&self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.reachable(device_id)?;

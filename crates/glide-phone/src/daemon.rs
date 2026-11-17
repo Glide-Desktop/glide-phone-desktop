@@ -145,6 +145,16 @@ impl PhoneDaemon {
         self.manager.lock().await.browse_phone(device_id).is_ok()
     }
 
+    /// Sends a `kdeconnect.mousepad.request` body (JSON) to drive the phone.
+    pub async fn control_phone_input(&self, device_id: &str, body_json: &str) -> bool {
+        let Ok(body) = serde_json::from_str(body_json) else { return false };
+        self.manager.lock().await.control_phone_input(device_id, body).is_ok()
+    }
+
+    pub async fn ping(&self, device_id: &str) -> bool {
+        self.manager.lock().await.ping(device_id).is_ok()
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

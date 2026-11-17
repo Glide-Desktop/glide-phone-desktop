@@ -17,6 +17,13 @@ pub struct Panels {
     pub commands: Vec<CommandRow>,
     pub phone_media: PhoneMedia,
     pub device_names: std::collections::HashMap<String, String>,
+    /// Paired phones that are connected now.
+    pub reachable: Vec<String>,
+    pad_down: bool,
+    pad_last: Option<glide_sdk::iced::Point>,
+    pad_travel: f32,
+    pub typed: String,
+    pub share_draft: String,
     pub draft_name: String,
     pub draft_command: String,
 }
@@ -29,6 +36,17 @@ pub enum PanelMessage {
     RemoveCommand(String),
     /// (device, player, action)
     PhoneMedia(String, String, &'static str),
+    PadPress,
+    PadRelease,
+    PadRight,
+    PadMove(glide_sdk::iced::Point),
+    PadScroll(glide_sdk::iced::mouse::ScrollDelta),
+    Typed(String),
+    SendTyped,
+    Special(u64),
+    Ping,
+    ShareDraft(String),
+    Share,
 }
 
 impl Panels {
@@ -43,6 +61,62 @@ impl Panels {
             PanelMessage::RemoveCommand(key) => {
                 remove_command(&key);
                 return Task::done(Message::Refresh);
+            }
+            PanelMessage::PadPress => {
+                self.pad_down = true;
+                self.pad_travel = 0.0;
+            }
+            PanelMessage::PadRelease => {
+                // A press without movement is a tap: a click on the phone.
+                if self.pad_down && self.pad_travel < 4.0 {
+                    self.input(serde_json::json!({ "singleclick": true }));
+                }
+                self.pad_down = false;
+            }
+            PanelMessage::PadRight => self.input(serde_json::json!({ "rightclick": true })),
+            PanelMessage::PadMove(point) => {
+                if let Some(last) = self.pad_last.replace(point)
+                    && self.pad_down
+                {
+                    let (dx, dy) = (point.x - last.x, point.y - last.y);
+                    self.pad_travel += dx.abs() + dy.abs();
+                    self.input(serde_json::json!({ "dx": dx, "dy": dy }));
+                }
+            }
+            PanelMessage::PadScroll(delta) => {
+                let (dx, dy) = match delta {
+                    glide_sdk::iced::mouse::ScrollDelta::Lines { x, y } => (x * 20.0, y * 20.0),
+                    glide_sdk::iced::mouse::ScrollDelta::Pixels { x, y } => (x, y),
+                };
+                self.input(serde_json::json!({ "scroll": true, "dx": dx, "dy": dy }));
+            }
+            PanelMessage::Typed(text) => self.typed = text,
+            PanelMessage::SendTyped => {
+                let text = std::mem::take(&mut self.typed);
+                if !text.is_empty() {
+                    self.input(serde_json::json!({ "key": text }));
+                }
+            }
+            PanelMessage::Special(key) => self.input(serde_json::json!({ "specialKey": key })),
+            PanelMessage::Ping => {
+                if let Some(device) = self.reachable.first() {
+                    if let Some(proxy) = proxy() {
+                        let _ = proxy.ping(device);
+                    } else if let Some(manager) = global_manager()
+                        && let Ok(guard) = manager.try_lock()
+                    {
+                        let _ = guard.ping(device);
+                    }
+                }
+            }
+            PanelMessage::ShareDraft(text) => self.share_draft = text,
+            PanelMessage::Share => {
+                let text = std::mem::take(&mut self.share_draft);
+                if let Some(device) = self.reachable.first().cloned()
+                    && !text.trim().is_empty()
+                {
+                    share_to_phone(&device, text.trim());
+                }
             }
             PanelMessage::PhoneMedia(device, player, action) => {
                 if let Some(proxy) = proxy() {
@@ -63,8 +137,37 @@ impl Panels {
         if self.phone_media.values().any(|players| !players.is_empty()) {
             sections.push(phone_media_group(self, shell));
         }
+        if !self.reachable.is_empty() {
+            sections.push(control_group(self, shell));
+        }
         sections.push(commands_group(self, shell));
         sections
+    }
+}
+
+impl Panels {
+    /// Sends a mousepad request to the first reachable phone.
+    fn input(&self, body: serde_json::Value) {
+        let Some(device) = self.reachable.first() else { return };
+        if let Some(proxy) = proxy() {
+            let _ = proxy.control_phone_input(device, &body.to_string());
+        } else if let Some(manager) = global_manager()
+            && let Ok(guard) = manager.try_lock()
+        {
+            let _ = guard.control_phone_input(device, body);
+        }
+    }
+}
+
+/// A link opens in the phone's browser; other text arrives as shared text.
+fn share_to_phone(device: &str, text: &str) {
+    let is_url = (text.starts_with("http://") || text.starts_with("https://")) && !text.contains(char::is_whitespace);
+    if let Some(proxy) = proxy() {
+        let _ = if is_url { proxy.share_url(device, text) } else { proxy.share_text(device, text) };
+    } else if let Some(manager) = global_manager()
+        && let Ok(guard) = manager.try_lock()
+    {
+        let _ = if is_url { guard.share_url(device, text) } else { guard.share_text(device, text) };
     }
 }
 
@@ -187,4 +290,67 @@ fn phone_media_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Eleme
         }
     }
     group.into()
+}
+
+/// KDE Connect's remote input for the phone: a touchpad, typing and special keys.
+fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    use glide_sdk::iced::widget::{container, mouse_area, text};
+    let paint = shell.paint();
+    let device = panels.reachable.first().and_then(|id| panels.device_names.get(id)).cloned().unwrap_or_default();
+    let pad = mouse_area(
+        container(text(shell.t("Сенсорна панель телефону", "Phone touchpad")).size(13))
+            .center_x(glide_sdk::iced::Fill)
+            .center_y(140.0)
+            .style(move |_| glide_sdk::iced::widget::container::Style {
+                background: Some(paint.fill_2().into()),
+                border: glide_sdk::iced::Border { radius: 12.0.into(), ..Default::default() },
+                ..Default::default()
+            }),
+    )
+    .on_press(Message::Panel(PanelMessage::PadPress))
+    .on_release(Message::Panel(PanelMessage::PadRelease))
+    .on_right_press(Message::Panel(PanelMessage::PadRight))
+    .on_move(|point| Message::Panel(PanelMessage::PadMove(point)))
+    .on_scroll(|delta| Message::Panel(PanelMessage::PadScroll(delta)));
+    let key = |label: &'a str, code: u64| {
+        widget::compact_button(paint, label, Tone::Neutral, Some(Message::Panel(PanelMessage::Special(code))))
+    };
+    let keys =
+        row![key("←", 4), key("↑", 5), key("↓", 7), key("→", 6), key("⌫", 1), key("⏎", 12), key("Esc", 14)].spacing(6);
+    let typing = row![
+        widget::text_field(
+            paint,
+            shell.t("Надрукувати на телефоні", "Type on the phone"),
+            &panels.typed,
+            |v| { Message::Panel(PanelMessage::Typed(v)) }
+        ),
+        widget::compact_button(
+            paint,
+            shell.t("Надрукувати", "Type"),
+            Tone::Tonal,
+            Some(Message::Panel(PanelMessage::SendTyped))
+        ),
+    ]
+    .spacing(8);
+    let share = row![
+        widget::text_field(
+            paint,
+            shell.t("Текст або посилання для телефону", "Text or link for the phone"),
+            &panels.share_draft,
+            |v| { Message::Panel(PanelMessage::ShareDraft(v)) }
+        ),
+        widget::compact_button(
+            paint,
+            shell.t("Надіслати", "Send"),
+            Tone::Tonal,
+            Some(Message::Panel(PanelMessage::Share))
+        ),
+        widget::compact_button(paint, "Ping", Tone::Neutral, Some(Message::Panel(PanelMessage::Ping))),
+    ]
+    .spacing(8);
+    widget::Group::new(paint)
+        .title(shell.t("Керувати телефоном", "Control the phone"))
+        .description(device)
+        .push(column![pad, keys, typing, share].spacing(10))
+        .into()
 }
