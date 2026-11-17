@@ -464,6 +464,9 @@ impl PhoneManager {
                     if crate::plugins::battery::turned_low(device.battery, battery_state) {
                         crate::plugins::battery::announce_low(&device_name, battery_state.charge);
                     }
+                    if crate::plugins::battery::turned_full(device.battery, battery_state) {
+                        crate::plugins::battery::announce_full(&device_name);
+                    }
                     device.battery = Some(battery_state);
                     self.notify.notify_waiters();
                 }

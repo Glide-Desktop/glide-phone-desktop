@@ -74,6 +74,21 @@ pub fn turned_low(before: Option<BatteryState>, now: BatteryState) -> bool {
     now.is_low && !before.is_some_and(|before| before.is_low)
 }
 
+/// Glide-only: the phone just finished charging (100 % on the charger).
+#[must_use]
+pub fn turned_full(before: Option<BatteryState>, now: BatteryState) -> bool {
+    now.charge >= 100 && now.is_charging && before.is_some_and(|before| before.charge < 100)
+}
+
+pub fn announce_full(device_name: &str) {
+    use crate::i18n::{Key, naming, t};
+    crate::plugins::announce(
+        glide_sdk::system::Notification::new("glide-phone", naming(Key::FullyCharged, device_name))
+            .body(t(Key::FullyChargedHint))
+            .icon("battery-full-charged-symbolic"),
+    );
+}
+
 pub fn announce_low(device_name: &str, charge: i32) {
     use crate::i18n::{Key, naming, t};
     let body = t(Key::BatteryAt).replace("{percent}", &charge.to_string());
@@ -88,6 +103,15 @@ pub fn announce_low(device_name: &str, charge: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_charge_is_announced_once() {
+        let at = |charge, is_charging| BatteryState { charge, is_charging, is_low: false };
+        assert!(turned_full(Some(at(99, true)), at(100, true)));
+        assert!(!turned_full(Some(at(100, true)), at(100, true)), "not again");
+        assert!(!turned_full(None, at(100, true)), "not on connect");
+        assert!(!turned_full(Some(at(99, false)), at(100, false)), "off the charger");
+    }
 
     #[test]
     fn a_low_battery_is_announced_when_it_turns_low_not_with_every_percent_it_loses() {
