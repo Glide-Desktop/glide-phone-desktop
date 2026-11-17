@@ -88,6 +88,7 @@ pub struct State {
     pub ringing: bool,
     pub commands: Vec<crate::panels::CommandRow>,
     pub setup_requested: bool,
+    pub phone_media: crate::panels::PhoneMedia,
 }
 
 type Snapshot = Option<State>;
@@ -106,6 +107,11 @@ fn snapshot() -> Snapshot {
                 .map(|json| crate::panels::command_rows_from_json(&json))
                 .unwrap_or_default(),
             setup_requested: proxy.take_commands_setup().unwrap_or(false),
+            phone_media: proxy
+                .list_phone_media_json()
+                .ok()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default(),
         });
     }
     let mut guard = global_manager()?.try_lock().ok()?;
@@ -115,6 +121,7 @@ fn snapshot() -> Snapshot {
         ringing: guard.is_ringing(),
         commands: crate::panels::command_rows(&guard.commands.entries),
         setup_requested,
+        phone_media: guard.phone_media.clone(),
     })
 }
 
@@ -144,6 +151,20 @@ impl PhoneApp {
             shell.toast(shell.t("Запит буде надіслано після підключення", "Pairing request queued until connected"));
         } else {
             shell.toast(shell.t("Запит на з'єднання надіслано", "Pairing request sent"));
+        }
+    }
+
+    fn apply_state(&mut self, state: Option<State>, shell: &mut Shell<Message>) {
+        self.refreshing = false;
+        if let Some(state) = state {
+            self.devices = state.cards;
+            self.ringing_local = state.ringing;
+            self.panels.commands = state.commands;
+            self.panels.phone_media = state.phone_media;
+            self.panels.device_names = self.devices.iter().map(|d| (d.id.clone(), d.name.clone())).collect();
+            if state.setup_requested {
+                shell.toast(shell.t("Телефон просить налаштувати команди", "The phone asks to set up commands"));
+            }
         }
     }
 
@@ -566,18 +587,7 @@ impl App for PhoneApp {
                     return Task::perform(off_thread(snapshot), Message::Loaded);
                 }
             }
-            Message::Loaded(state) => {
-                self.refreshing = false;
-                if let Some(state) = state.flatten() {
-                    self.devices = state.cards;
-                    self.ringing_local = state.ringing;
-                    self.panels.commands = state.commands;
-                    if state.setup_requested {
-                        shell
-                            .toast(shell.t("Телефон просить налаштувати команди", "The phone asks to set up commands"));
-                    }
-                }
-            }
+            Message::Loaded(state) => self.apply_state(state.flatten(), shell),
         }
         Task::none()
     }

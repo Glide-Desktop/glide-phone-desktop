@@ -66,6 +66,8 @@ pub struct PhoneManager {
     clipboard: Option<(String, i64)>,
     presenter_events: VecDeque<(String, PresenterEvent)>,
     pub commands: crate::plugins::runcommand::Commands,
+    /// The phones' media players, by device.
+    pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// Set when a phone asked to set commands up here; the window opens that section.
     pub commands_setup_requested: bool,
     pub notify: Arc<Notify>,
@@ -110,6 +112,7 @@ impl PhoneManager {
             presenter_events: VecDeque::new(),
             commands: crate::plugins::runcommand::Commands::load(commands_path),
             commands_setup_requested: false,
+            phone_media: HashMap::new(),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -299,6 +302,7 @@ impl PhoneManager {
         }
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
+        self.phone_media.remove(device_id);
         self.presenter_events.retain(|(id, _)| id != device_id);
         if let Some(dev) = self.devices.get_mut(device_id) {
             dev.connected = false;
@@ -307,6 +311,11 @@ impl PhoneManager {
             }
         }
         self.notify.notify_waiters();
+    }
+
+    #[must_use]
+    pub fn sender_for(&self, device_id: &str) -> Option<PacketSender> {
+        self.is_paired(device_id).then(|| self.senders.get(device_id).cloned()).flatten()
     }
 
     pub fn send_to_device(&self, device_id: &str, packet: NetworkPacket) {
@@ -333,7 +342,7 @@ impl PhoneManager {
             return Ok(None);
         }
 
-        if self.handle_aux_packet(device_id, packet, &device_name) {
+        if self.handle_aux_packet(device_id, packet, &device_name, payload_png) {
             return Ok(None);
         }
 
@@ -433,7 +442,50 @@ impl PhoneManager {
         self.notify.notify_waiters();
     }
 
-    fn handle_aux_packet(&mut self, device_id: &str, packet: &NetworkPacket, device_name: &str) -> bool {
+    fn handle_phone_media(&mut self, device_id: &str, packet: &NetworkPacket, payload: Option<&[u8]>) {
+        use crate::plugins::remote_media::{Update, apply, request, state_request, store_art};
+        let players = self.phone_media.entry(device_id.to_string()).or_default();
+        if packet.body.get("transferringAlbumArt").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            let url = packet.body.get("albumArtUrl").and_then(serde_json::Value::as_str).unwrap_or_default();
+            if let (Some(bytes), Some(name)) = (payload, packet.body.get("player").and_then(serde_json::Value::as_str))
+                && let Some(player) = players.get_mut(name).filter(|p| p.art_url == url)
+            {
+                player.art_file = store_art(bytes, url);
+                self.notify.notify_waiters();
+            }
+            return;
+        }
+        match apply(players, &packet.body) {
+            Update::Players(fresh) => {
+                for name in fresh {
+                    self.send_to_device(device_id, state_request(&name));
+                }
+            }
+            Update::State { art_to_fetch: Some(url) } if !url.starts_with("http") => {
+                let player = packet.body.get("player").cloned().unwrap_or_default();
+                self.send_to_device(device_id, request(serde_json::json!({ "player": player, "albumArtUrl": url })));
+            }
+            _ => {}
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Controls one of a phone's players (`action`, `setVolume`, `SetPosition`, ...).
+    #[must_use]
+    pub fn control_phone_media(&self, device_id: &str, player: &str, mut body: serde_json::Value) -> bool {
+        if !self.is_paired(device_id) || !self.is_connected(device_id) {
+            return false;
+        }
+        if let serde_json::Value::Object(map) = &mut body {
+            map.insert("player".into(), serde_json::json!(player));
+        }
+        self.send_to_device(device_id, crate::plugins::remote_media::request(body));
+        true
+    }
+
+    fn handle_aux_packet(
+        &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
+    ) -> bool {
         match packet.packet_type.as_str() {
             PACKET_TYPE_CLIPBOARD | crate::plugins::clipboard::PACKET_TYPE_CLIPBOARD_CONNECT => {
                 if let Ok(clipboard) = handle_clipboard_packet(packet) {
@@ -482,6 +534,10 @@ impl PhoneManager {
                     self.presenter_events.push_back((device_id.to_string(), event));
                     self.notify.notify_waiters();
                 }
+                true
+            }
+            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
+                self.handle_phone_media(device_id, packet, payload);
                 true
             }
             crate::plugins::mpris::PACKET_TYPE_MPRIS_REQUEST => {

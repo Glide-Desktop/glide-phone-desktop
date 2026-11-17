@@ -1391,3 +1391,63 @@ async fn the_phone_sees_and_controls_this_computers_media_players() {
     }
     assert!(got_list);
 }
+
+#[tokio::test]
+async fn the_phones_players_are_mirrored_and_driven_from_this_computer() {
+    use glide_phone::config::PairedDevice;
+    use glide_phone::plugins::remote_media::{Exported, PACKET_TYPE_MPRIS_REQUEST};
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender.clone(), Some("AA".to_string()));
+    while sent.try_recv().is_ok() {}
+
+    manager
+        .handle_packet("pinned", &NetworkPacket::new("kdeconnect.mpris", json!({"playerList": ["Spotify"]})))
+        .unwrap();
+    let ask = std::iter::from_fn(|| sent.try_recv().ok())
+        .find(|p| p.packet_type == PACKET_TYPE_MPRIS_REQUEST)
+        .expect("state requested for the new player");
+    assert_eq!(ask.packet_type, PACKET_TYPE_MPRIS_REQUEST);
+    assert_eq!(ask.body["requestNowPlaying"], true);
+    let state = json!({"player": "Spotify", "title": "Пісня", "isPlaying": true, "albumArtUrl": "kdeArtHash://x"});
+    manager.handle_packet("pinned", &NetworkPacket::new("kdeconnect.mpris", state)).unwrap();
+    let mut next_request = || loop {
+        match sent.try_recv() {
+            Ok(packet) if packet.packet_type == PACKET_TYPE_MPRIS_REQUEST => break Some(packet),
+            Ok(_) => {}
+            Err(_) => break None,
+        }
+    };
+    assert_eq!(next_request().expect("art requested").body["albumArtUrl"], "kdeArtHash://x");
+    assert_eq!(manager.phone_media["pinned"]["Spotify"].title, "Пісня");
+    assert!(manager.control_phone_media("pinned", "Spotify", json!({"action": "Next"})));
+    assert_eq!(next_request().unwrap().body, json!({"action": "Next", "player": "Spotify"}));
+
+    // Published as an MPRIS player, the desktop's media controls reach the phone.
+    let Some(bus) = glide_app::test_bus::private_bus() else { return };
+    let player = manager.phone_media["pinned"]["Spotify"].clone();
+    let _export = Exported::publish(Some(&bus.address), "pinned", "Pixel", &player, sender).await.expect("publish");
+    let client = zbus::connection::Builder::address(bus.address.as_str()).unwrap().build().await.unwrap();
+    let dbus = zbus::fdo::DBusProxy::new(&client).await.unwrap();
+    let name = dbus
+        .list_names()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.to_string())
+        .find(|n| n.starts_with("org.mpris.MediaPlayer2.glidephone."))
+        .expect("exported player");
+    let proxy =
+        zbus::Proxy::new(&client, name, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player").await.unwrap();
+    assert_eq!(proxy.get_property::<String>("PlaybackStatus").await.unwrap(), "Playing");
+    proxy.call_method("PlayPause", &()).await.unwrap();
+    let request = loop {
+        let packet = sent.recv().await.unwrap();
+        if packet.packet_type == PACKET_TYPE_MPRIS_REQUEST {
+            break packet;
+        }
+    };
+    assert_eq!(request.body, json!({"action": "PlayPause", "player": "Spotify"}));
+}

@@ -137,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex<glide_phone::PhoneManager>>) {
     let manager = manager.clone();
     let _guard = rt.enter();
+    rt.spawn(glide_phone::plugins::remote_media::run_exports(manager.clone(), None));
     let players_manager = manager.clone();
     rt.spawn(async move {
         if let Some(conn) = glide_phone::plugins::mpris::session().await {

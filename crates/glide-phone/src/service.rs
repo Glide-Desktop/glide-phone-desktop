@@ -112,11 +112,13 @@ impl PhoneService {
                 "kdeconnect.ping".to_string(),
                 "kdeconnect.runcommand.request".to_string(),
                 "kdeconnect.mpris.request".to_string(),
+                "kdeconnect.mpris".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
                 "kdeconnect.runcommand.output".to_string(),
                 "kdeconnect.mpris".to_string(),
+                "kdeconnect.mpris.request".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
                 "kdeconnect.clipboard.connect".to_string(),
@@ -424,6 +426,11 @@ impl PhoneService {
             PACKET_TYPE_NOTIFICATION => {
                 let (mut stream, size) =
                     self.open_payload(peer_addr, peer_id, packet, MAX_NOTIFICATION_PAYLOAD_BYTES).await?;
+                read_payload(&mut stream, size).await
+            }
+            // Album art of a phone player (transferringAlbumArt).
+            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
+                let (mut stream, size) = self.open_payload(peer_addr, peer_id, packet, 8 * 1024 * 1024).await?;
                 read_payload(&mut stream, size).await
             }
             PACKET_TYPE_SHARE_REQUEST => {

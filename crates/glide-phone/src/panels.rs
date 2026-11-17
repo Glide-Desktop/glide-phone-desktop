@@ -9,10 +9,14 @@ use glide_sdk::widget::{Icon, Tone};
 use crate::plugins::runcommand::Command;
 use crate::ui::{Message, global_manager, proxy};
 
+pub type PhoneMedia = std::collections::HashMap<String, BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>;
+
 /// State of the feature sections.
 #[derive(Debug, Default)]
 pub struct Panels {
     pub commands: Vec<CommandRow>,
+    pub phone_media: PhoneMedia,
+    pub device_names: std::collections::HashMap<String, String>,
     pub draft_name: String,
     pub draft_command: String,
 }
@@ -23,6 +27,8 @@ pub enum PanelMessage {
     CommandLine(String),
     AddCommand,
     RemoveCommand(String),
+    /// (device, player, action)
+    PhoneMedia(String, String, &'static str),
 }
 
 impl Panels {
@@ -38,13 +44,27 @@ impl Panels {
                 remove_command(&key);
                 return Task::done(Message::Refresh);
             }
+            PanelMessage::PhoneMedia(device, player, action) => {
+                if let Some(proxy) = proxy() {
+                    let _ = proxy.phone_media_action(&device, &player, action);
+                } else if let Some(manager) = global_manager()
+                    && let Ok(guard) = manager.try_lock()
+                {
+                    let _ = guard.control_phone_media(&device, &player, serde_json::json!({ "action": action }));
+                }
+            }
         }
         Task::none()
     }
 
     #[must_use]
     pub fn view<'a>(&'a self, shell: &'a Shell<Message>) -> Vec<Element<'a, Message>> {
-        vec![commands_group(self, shell)]
+        let mut sections = Vec::new();
+        if self.phone_media.values().any(|players| !players.is_empty()) {
+            sections.push(phone_media_group(self, shell));
+        }
+        sections.push(commands_group(self, shell));
+        sections
     }
 }
 
@@ -130,4 +150,41 @@ fn commands_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<
     ]
     .spacing(8);
     group.push(editor).into()
+}
+
+/// Players running on the phone, with their controls (KDE Connect's media remote).
+fn phone_media_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    let paint = shell.paint();
+    let mut group = widget::Group::new(paint).title(shell.t("Медіа на телефоні", "Media on the phone"));
+    for (device, players) in &panels.phone_media {
+        for player in players.values() {
+            let title = if player.title.is_empty() { player.player.clone() } else { player.title.clone() };
+            let mut subtitle = [player.artist.as_str(), player.player.as_str()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if let Some(name) = panels.device_names.get(device) {
+                subtitle = format!("{subtitle} — {name}");
+            }
+            let button = |label: &'a str, action: &'static str, enabled: bool| {
+                widget::compact_button(
+                    paint,
+                    label,
+                    Tone::Neutral,
+                    enabled.then(|| {
+                        Message::Panel(PanelMessage::PhoneMedia(device.clone(), player.player.clone(), action))
+                    }),
+                )
+            };
+            let controls = row![
+                button("⏮", "Previous", player.can_go_previous),
+                button(if player.is_playing { "⏸" } else { "▶" }, "PlayPause", true),
+                button("⏭", "Next", player.can_go_next),
+            ]
+            .spacing(6);
+            group = group.push(widget::ListRow::new(paint, title).subtitle(subtitle).suffix(controls));
+        }
+    }
+    group.into()
 }

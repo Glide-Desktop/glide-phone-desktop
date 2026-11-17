@@ -129,6 +129,17 @@ impl PhoneDaemon {
         std::mem::take(&mut self.manager.lock().await.commands_setup_requested)
     }
 
+    /// The phones' media players: `{device id: {player: state}}`.
+    pub async fn list_phone_media_json(&self) -> String {
+        serde_json::to_string(&self.manager.lock().await.phone_media).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Sends `action` (`Play`, `Pause`, `PlayPause`, `Next`, `Previous`, `Stop`) to a phone's player.
+    pub async fn phone_media_action(&self, device_id: &str, player: &str, action: &str) -> bool {
+        matches!(action, "Play" | "Pause" | "PlayPause" | "Next" | "Previous" | "Stop")
+            && self.manager.lock().await.control_phone_media(device_id, player, serde_json::json!({ "action": action }))
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

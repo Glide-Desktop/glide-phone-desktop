@@ -17,6 +17,8 @@ pub trait PhoneDaemon {
     fn add_command(&self, name: &str, command: &str) -> zbus::Result<bool>;
     fn remove_command(&self, key: &str) -> zbus::Result<bool>;
     fn take_commands_setup(&self) -> zbus::Result<bool>;
+    fn list_phone_media_json(&self) -> zbus::Result<String>;
+    fn phone_media_action(&self, device_id: &str, player: &str, action: &str) -> zbus::Result<bool>;
     fn take_presenter_event(&self) -> zbus::Result<String>;
     fn is_ringing(&self) -> zbus::Result<bool>;
 }
