@@ -140,6 +140,11 @@ impl PhoneDaemon {
             && self.manager.lock().await.control_phone_media(device_id, player, serde_json::json!({ "action": action }))
     }
 
+    /// Opens the phone's files (mounted over SFTP).
+    pub async fn browse_phone(&self, device_id: &str) -> bool {
+        self.manager.lock().await.browse_phone(device_id).is_ok()
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

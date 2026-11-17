@@ -22,6 +22,8 @@ glide_sdk::catalogue! {
     IncomingCall => "Incoming call from {caller}", "Вхідний дзвінок: {caller}";
     MissedCall => "Missed call from {caller}", "Пропущений дзвінок: {caller}";
     MuteCall => "Mute", "Вимкнути звук";
+    BrowseFailed => "Cannot open the files of {device}", "Не вдалося відкрити файли {device}";
+    InstallSshfs => "Install sshfs to browse the phone's files.", "Встановіть sshfs, щоб переглядати файли телефону.";
 }
 
 #[must_use]

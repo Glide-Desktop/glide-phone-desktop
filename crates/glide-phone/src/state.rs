@@ -293,6 +293,13 @@ impl PhoneManager {
         }
     }
 
+    /// Asks the phone for its files (they open once it answers).
+    pub fn browse_phone(&self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        self.send_to_device(device_id, crate::plugins::sftp::start_browsing_packet());
+        Ok(())
+    }
+
     /// Sends `packet` to every connected, paired phone.
     pub fn broadcast(&self, packet: &NetworkPacket) {
         for (id, sender) in &self.senders {
@@ -347,6 +354,10 @@ impl PhoneManager {
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let id = device_id.to_string();
+            tokio::spawn(async move { crate::plugins::sftp::unmount(&id).await });
+        }
         self.presenter_events.retain(|(id, _)| id != device_id);
         if let Some(dev) = self.devices.get_mut(device_id) {
             dev.connected = false;
@@ -541,6 +552,24 @@ impl PhoneManager {
                 if let Some(device) = self.devices.get_mut(device_id) {
                     device.signals = crate::plugins::connectivity::parse(&packet.body);
                     self.notify.notify_waiters();
+                }
+                true
+            }
+            crate::plugins::sftp::PACKET_TYPE_SFTP => {
+                match crate::plugins::sftp::parse(&packet.body) {
+                    crate::plugins::sftp::Reply::Login(login) if tokio::runtime::Handle::try_current().is_ok() => {
+                        let (id, name) = (device_id.to_string(), device_name.to_string());
+                        tokio::spawn(async move { crate::plugins::sftp::browse(&id, &name, login).await });
+                    }
+                    crate::plugins::sftp::Reply::Error(message) => crate::plugins::announce(
+                        glide_sdk::system::Notification::new(
+                            "glide-phone",
+                            crate::i18n::naming(crate::i18n::Key::BrowseFailed, device_name),
+                        )
+                        .body(message)
+                        .icon("folder-remote-symbolic"),
+                    ),
+                    _ => {}
                 }
                 true
             }

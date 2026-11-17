@@ -77,6 +77,7 @@ pub enum Message {
     DismissNotification(String, String),
     ClearNotifications(String),
     SendFiles(String),
+    BrowseFiles(String),
     FilesChosen(String, Vec<std::path::PathBuf>),
     Panel(crate::panels::PanelMessage),
     Refresh,
@@ -300,6 +301,14 @@ impl PhoneApp {
         let mut actions = row![].spacing(SP2).align_y(Alignment::Center);
 
         if dev.connected {
+            actions = actions.push(widget::glyph_button(
+                paint,
+                Icon::Folder,
+                shell.t("Файли телефону", "Phone files"),
+                Tone::Tonal,
+                Size::Small,
+                Some(Message::BrowseFiles(dev.id.clone())),
+            ));
             actions = actions.push(widget::glyph_button(
                 paint,
                 Icon::File,
@@ -588,6 +597,16 @@ impl App for PhoneApp {
                 }
             }
             Message::SendFiles(id) => return Self::choose_files(id, shell),
+            Message::BrowseFiles(id) => {
+                let asked = if let Some(proxy) = get_proxy() {
+                    proxy.browse_phone(&id).unwrap_or(false)
+                } else {
+                    global_manager().and_then(|m| m.try_lock().ok()).is_some_and(|g| g.browse_phone(&id).is_ok())
+                };
+                if !asked {
+                    shell.toast(shell.t("Телефон недоступний", "The phone is not reachable"));
+                }
+            }
             Message::FilesChosen(id, paths) => Self::send_files(&id, paths, shell),
             Message::Panel(message) => return self.panels.update(message),
             Message::Refresh => {

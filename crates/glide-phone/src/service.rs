@@ -117,6 +117,7 @@ impl PhoneService {
                 "kdeconnect.notification.request".to_string(),
                 "kdeconnect.telephony".to_string(),
                 "kdeconnect.connectivity_report".to_string(),
+                "kdeconnect.sftp".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -126,6 +127,7 @@ impl PhoneService {
                 "kdeconnect.systemvolume".to_string(),
                 "kdeconnect.notification".to_string(),
                 "kdeconnect.telephony.request_mute".to_string(),
+                "kdeconnect.sftp.request".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
                 "kdeconnect.clipboard.connect".to_string(),
