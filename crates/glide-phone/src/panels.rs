@@ -26,6 +26,10 @@ pub struct Panels {
     pub share_draft: String,
     pub sms: std::collections::HashMap<String, crate::plugins::sms::Inbox>,
     pub keyboard_off: std::collections::HashMap<String, bool>,
+    /// Contact names of the shown phone, by number key (refreshed with the state).
+    pub names: std::collections::HashMap<String, String>,
+    /// Phones whose conversations were already asked for in this window.
+    sms_asked: std::collections::HashSet<String>,
     pub open_thread: Option<i64>,
     pub sms_draft: String,
     pub draft_name: String,
@@ -205,6 +209,21 @@ impl Panels {
 }
 
 impl Panels {
+    /// After each refresh: load names and, once per phone, ask for its conversations.
+    pub fn refreshed(&mut self) {
+        let Some(device) = self.reachable.first().cloned() else { return };
+        self.names = crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(&device));
+        if self.sms_asked.insert(device.clone()) {
+            if let Some(proxy) = proxy() {
+                let _ = proxy.request_sms_conversations(&device);
+            } else if let Some(manager) = global_manager()
+                && let Ok(guard) = manager.try_lock()
+            {
+                let _ = guard.request_sms_conversations(&device);
+            }
+        }
+    }
+
     fn inbox(&self) -> Option<&crate::plugins::sms::Inbox> {
         self.sms.get(self.reachable.first()?)
     }
@@ -455,11 +474,7 @@ fn messages_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<
     let paint = shell.paint();
     let mut group = widget::Group::new(paint).title(shell.t("Повідомлення", "Messages"));
     let Some(inbox) = panels.inbox() else { return group.into() };
-    let names = panels
-        .reachable
-        .first()
-        .map(|device| crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(device)))
-        .unwrap_or_default();
+    let names = &panels.names;
     let who = |message: &crate::plugins::sms::Message| {
         let number = message.addresses.join(", ");
         message

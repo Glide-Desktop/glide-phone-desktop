@@ -157,7 +157,14 @@ impl PhoneDaemon {
 
     /// The phones' messages: `{device id: inbox}`.
     pub async fn list_sms_json(&self) -> String {
-        serde_json::to_string(&self.manager.lock().await.sms).unwrap_or_else(|_| "{}".to_string())
+        let mgr = self.manager.lock().await;
+        let recent: std::collections::HashMap<&String, crate::plugins::sms::Inbox> =
+            mgr.sms.iter().map(|(device, inbox)| (device, inbox.recent(20))).collect();
+        serde_json::to_string(&recent).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub async fn request_sms_conversations(&self, device_id: &str) -> bool {
+        self.manager.lock().await.request_sms_conversations(device_id).is_ok()
     }
 
     pub async fn request_sms_thread(&self, device_id: &str, thread: i64) -> bool {

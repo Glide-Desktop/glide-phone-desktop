@@ -23,6 +23,7 @@ pub trait PhoneDaemon {
     fn control_phone_input(&self, device_id: &str, body_json: &str) -> zbus::Result<bool>;
     fn ping(&self, device_id: &str) -> zbus::Result<bool>;
     fn list_sms_json(&self) -> zbus::Result<String>;
+    fn request_sms_conversations(&self, device_id: &str) -> zbus::Result<bool>;
     fn request_sms_thread(&self, device_id: &str, thread: i64) -> zbus::Result<bool>;
     fn send_sms(&self, device_id: &str, addresses: Vec<String>, text: &str) -> zbus::Result<bool>;
     fn take_presenter_event(&self) -> zbus::Result<String>;

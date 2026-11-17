@@ -1499,3 +1499,22 @@ fn this_computer_drives_the_phone_and_pings_it() {
     manager.ping("pinned").unwrap();
     assert_eq!(sent.try_recv().unwrap().packet_type, "kdeconnect.ping");
 }
+
+#[test]
+fn a_paired_phone_is_greeted_by_every_plugin() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    let types: Vec<String> = std::iter::from_fn(|| sent.try_recv().ok()).map(|p| p.packet_type).collect();
+    for expected in [
+        "kdeconnect.runcommand",
+        "kdeconnect.mousepad.keyboardstate",
+        "kdeconnect.contacts.request_all_uids_timestamps",
+        "glide.wol",
+    ] {
+        assert!(types.iter().any(|t| t == expected), "{expected} missing from {types:?}");
+    }
+}

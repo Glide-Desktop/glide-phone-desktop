@@ -232,8 +232,12 @@ impl PhoneManager {
 
     /// What our plugins send when a paired phone connects (their `onCreate` in KDE Connect).
     fn greeting(&self) -> Vec<NetworkPacket> {
-        let mut packets =
-            vec![self.commands.list_packet(), crate::plugins::mousepad::keyboard_state_packet(self.remote_input)];
+        let mut packets = vec![
+            self.commands.list_packet(),
+            crate::plugins::mousepad::keyboard_state_packet(self.remote_input),
+            crate::plugins::contacts::request_uids_packet(),
+            crate::plugins::wol::packet(&crate::plugins::wol::local_macs()),
+        ];
         if let Some((content, timestamp)) = &self.clipboard
             && *timestamp > 0
         {
@@ -403,9 +407,6 @@ impl PhoneManager {
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
-        if let Some(inbox) = self.sms.get_mut(device_id) {
-            inbox.synced = false; // the next connect resyncs quietly
-        }
         if tokio::runtime::Handle::try_current().is_ok() {
             let id = device_id.to_string();
             tokio::spawn(async move { crate::plugins::sftp::unmount(&id).await });
@@ -594,21 +595,18 @@ impl PhoneManager {
         true
     }
 
-    fn handle_sms(&mut self, device_id: &str, device_name: &str, packet: &NetworkPacket) {
-        let inbox = self.sms.entry(device_id.to_string()).or_default();
-        let fresh = inbox.merge(&packet.body);
-        // The conversation list comes newest first: after its first packet, only messages
-        // newer than everything seen are new.
-        inbox.synced = true;
-        if let Some(sender) = self.senders.get(device_id).cloned() {
-            let names = crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(device_id));
-            for message in fresh {
-                let number = message.addresses.first().cloned().unwrap_or_default();
-                let name = names.get(&crate::plugins::contacts::number_key(&number)).cloned().unwrap_or(number);
-                crate::plugins::sms::announce(device_name, &name, &message, sender.clone());
-            }
-        }
+    fn handle_sms(&mut self, device_id: &str, packet: &NetworkPacket) {
+        // New messages already reach this computer as the SMS app's notification (with its
+        // reply action), so they are only stored here, not announced a second time.
+        self.sms.entry(device_id.to_string()).or_default().merge(&packet.body);
         self.notify.notify_waiters();
+    }
+
+    /// Asks the phone for its conversations (when the window shows messages).
+    pub fn request_sms_conversations(&self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        self.send_to_device(device_id, crate::plugins::sms::request_conversations_packet());
+        Ok(())
     }
 
     /// Asks the phone for a thread's history.
@@ -691,7 +689,7 @@ impl PhoneManager {
                 true
             }
             crate::plugins::sms::PACKET_TYPE_SMS_MESSAGES => {
-                self.handle_sms(device_id, device_name, packet);
+                self.handle_sms(device_id, packet);
                 true
             }
             crate::plugins::contacts::PACKET_TYPE_RESPONSE_UIDS => {

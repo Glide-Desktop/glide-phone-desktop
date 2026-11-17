@@ -169,7 +169,17 @@ impl PhoneApp {
             self.ringing_local = state.ringing;
             self.panels.commands = state.commands;
             self.panels.phone_media = state.phone_media;
+            self.panels.sms = state.sms;
             self.panels.device_names = self.devices.iter().map(|d| (d.id.clone(), d.name.clone())).collect();
+            self.panels.reachable = self
+                .devices
+                .iter()
+                .filter(|d| d.connected && d.pair_state == PairState::Paired)
+                .map(|d| d.id.clone())
+                .collect();
+            self.panels.keyboard_off =
+                self.devices.iter().filter(|d| d.connected).map(|d| (d.id.clone(), d.keyboard_off)).collect();
+            self.panels.refreshed();
             if state.setup_requested {
                 shell.toast(shell.t("Телефон просить налаштувати команди", "The phone asks to set up commands"));
             }

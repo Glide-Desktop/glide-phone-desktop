@@ -1,6 +1,6 @@
 //! `kdeconnect.sms.*`: the phone's text messages on this computer (KDE Connect's SMS app):
-//! conversations, a thread's history, sending, and a notification with a reply box for each
-//! new incoming message.
+//! conversations, a thread's history and sending (new messages arrive as the phone's SMS app
+//! notification, with its reply action).
 
 use std::collections::BTreeMap;
 
@@ -117,35 +117,17 @@ pub fn send_packet(addresses: &[String], text: &str, sub_id: i64) -> NetworkPack
     )
 }
 
-/// Announces a new incoming message with a reply box; the reply is sent back to its thread.
-pub fn announce(device_name: &str, sender_name: &str, message: &Message, reply: crate::state::PacketSender) {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return;
+impl Inbox {
+    /// The same inbox with only each thread's newest `per_thread` messages (for the window).
+    #[must_use]
+    pub fn recent(&self, per_thread: usize) -> Self {
+        let threads = self
+            .threads
+            .iter()
+            .map(|(id, messages)| (*id, messages[messages.len().saturating_sub(per_thread)..].to_vec()))
+            .collect();
+        Self { threads, newest: self.newest, synced: self.synced }
     }
-    let summary = crate::i18n::t(crate::i18n::Key::SmsFrom).replace("{sender}", sender_name);
-    let note = glide_sdk::system::Notification::new("glide-phone", summary)
-        .origin_device(device_name)
-        .body(&message.body)
-        .icon("mail-message-new-symbolic")
-        .reply(crate::i18n::t(crate::i18n::Key::Reply), crate::i18n::t(crate::i18n::Key::ReplyHint));
-    let (addresses, sub_id) = (message.addresses.clone(), message.sub_id);
-    tokio::spawn(async move {
-        use futures_util::StreamExt as _;
-        let Ok(id) = glide_sdk::system::notify(note).await else { return };
-        let mut events = glide_sdk::system::notification_events();
-        while let Ok(Some(event)) = tokio::time::timeout(std::time::Duration::from_mins(30), events.next()).await {
-            match event {
-                glide_sdk::system::NotificationEvent::Replied { id: shown, text } if shown == id => {
-                    if !text.trim().is_empty() {
-                        let _ = reply.send(send_packet(&addresses, text.trim(), sub_id));
-                    }
-                    return;
-                }
-                glide_sdk::system::NotificationEvent::Closed { id: shown, .. } if shown == id => return,
-                _ => {}
-            }
-        }
-    });
 }
 
 #[cfg(test)]
