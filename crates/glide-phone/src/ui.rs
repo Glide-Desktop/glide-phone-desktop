@@ -305,8 +305,15 @@ impl PhoneApp {
                     format!("{app_label} · {}", n.title)
                 };
                 let dismiss_label = shell.t("Закрити сповіщення", "Dismiss notification");
+                // The picture the phone sent (a contact's avatar, else the app icon) rather
+                // than a letter, the same image the desktop notification shows.
+                let picture =
+                    n.icon_path.as_deref().map(std::path::Path::new).filter(|path| path.is_file()).map_or_else(
+                        || widget::letter_tile(paint, app_label, 28.0),
+                        |path| widget::photo(path, 28.0, 8.0),
+                    );
                 let notif_row: Element<'a, Message> = widget::ListRow::new(paint, title_line)
-                    .prefix(widget::letter_tile(paint, app_label, 28.0))
+                    .prefix(picture)
                     .subtitle(n.body.as_str())
                     .suffix(widget::icon_button(
                         paint,
