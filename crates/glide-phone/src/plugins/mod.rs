@@ -7,6 +7,7 @@ pub mod presenter;
 pub mod remote_media;
 pub mod runcommand;
 pub mod share;
+pub mod systemvolume;
 
 pub use battery::{BatteryPayload, BatteryState, handle_battery_packet, local_battery_packet};
 pub use clipboard::{ClipboardPayload, create_clipboard_packet, handle_clipboard_packet};

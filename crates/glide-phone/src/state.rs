@@ -246,6 +246,10 @@ impl PhoneManager {
                 let names = crate::plugins::mpris::refresh(&conn).await;
                 let _ = sender.send(crate::plugins::mpris::list_packet(&names));
             }
+            let sinks = crate::plugins::systemvolume::sinks().await;
+            if !sinks.is_empty() {
+                let _ = sender.send(crate::plugins::systemvolume::sink_list_packet(&sinks));
+            }
         });
     }
 
@@ -538,6 +542,15 @@ impl PhoneManager {
             }
             crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
                 self.handle_phone_media(device_id, packet, payload);
+                true
+            }
+            crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST => {
+                if let Some(sender) = self.senders.get(device_id).cloned()
+                    && tokio::runtime::Handle::try_current().is_ok()
+                {
+                    let body = packet.body.clone();
+                    tokio::spawn(async move { crate::plugins::systemvolume::handle_request(&body, &sender).await });
+                }
                 true
             }
             crate::plugins::mpris::PACKET_TYPE_MPRIS_REQUEST => {

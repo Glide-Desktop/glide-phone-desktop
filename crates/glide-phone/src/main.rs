@@ -138,6 +138,11 @@ fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex
     let manager = manager.clone();
     let _guard = rt.enter();
     rt.spawn(glide_phone::plugins::remote_media::run_exports(manager.clone(), None));
+    let volume_manager = manager.clone();
+    rt.spawn(glide_phone::plugins::systemvolume::watch(move |packet| {
+        let manager = volume_manager.clone();
+        tokio::spawn(async move { manager.lock().await.broadcast(&packet) });
+    }));
     let players_manager = manager.clone();
     rt.spawn(async move {
         if let Some(conn) = glide_phone::plugins::mpris::session().await {
