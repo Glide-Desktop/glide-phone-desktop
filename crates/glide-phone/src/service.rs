@@ -118,6 +118,8 @@ impl PhoneService {
                 "kdeconnect.telephony".to_string(),
                 "kdeconnect.connectivity_report".to_string(),
                 "kdeconnect.sftp".to_string(),
+                "kdeconnect.digitizer.session".to_string(),
+                "kdeconnect.digitizer".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),

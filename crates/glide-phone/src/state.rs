@@ -72,6 +72,7 @@ pub struct PhoneManager {
     input: Option<crate::input::RemoteInput>,
     remote_input: bool,
     mousepad: crate::plugins::mousepad::Mousepad,
+    digitizer: Option<crate::plugins::digitizer::Digitizer>,
     /// The phones' media players, by device.
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// Set when a phone asked to set commands up here; the window opens that section.
@@ -123,6 +124,7 @@ impl PhoneManager {
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
+            digitizer: None,
             notify: Arc::new(Notify::new()),
         }
     }
@@ -584,6 +586,18 @@ impl PhoneManager {
         match packet.packet_type.as_str() {
             crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
                 self.handle_phone_media(device_id, packet, payload);
+                true
+            }
+            crate::plugins::digitizer::PACKET_TYPE_DIGITIZER_SESSION if self.remote_input => {
+                if let Some(session) = crate::plugins::digitizer::parse_session(&packet.body) {
+                    self.digitizer.get_or_insert_with(crate::plugins::digitizer::Digitizer::start).session(session);
+                }
+                true
+            }
+            crate::plugins::digitizer::PACKET_TYPE_DIGITIZER if self.remote_input => {
+                if let Some(digitizer) = &self.digitizer {
+                    digitizer.pen(crate::plugins::digitizer::parse_event(&packet.body));
+                }
                 true
             }
             crate::plugins::connectivity::PACKET_TYPE_CONNECTIVITY_REPORT => {

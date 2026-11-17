@@ -312,3 +312,139 @@ mod tests {
         assert_eq!(std::mem::size_of::<UinputSetup>(), 92);
     }
 }
+
+// ---- Drawing tablet (kdeconnect.digitizer) ----
+
+const EV_ABS: u16 = 0x03;
+const ABS_X: u16 = 0x00;
+const ABS_Y: u16 = 0x01;
+const ABS_PRESSURE: u16 = 0x18;
+const BTN_TOOL_PEN: u16 = 0x140;
+const BTN_TOOL_RUBBER: u16 = 0x141;
+const BTN_TOUCH: u16 = 0x14a;
+pub const PRESSURE_MAX: i32 = 4096;
+const UI_SET_ABSBIT: u64 = iow(103, 4);
+const UI_ABS_SETUP: u64 = iow(4, std::mem::size_of::<UinputAbsSetup>() as u64);
+
+#[repr(C)]
+struct UinputAbsSetup {
+    code: u16,
+    _pad: u16,
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+    fuzz: i32,
+    flat: i32,
+    resolution: i32,
+}
+
+/// One digitizer report: what changed (None = unchanged), like `DigitizerPlugin.reportEvent`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PenEvent {
+    pub active: Option<bool>,
+    pub touching: Option<bool>,
+    pub rubber: Option<bool>,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub pressure: Option<f64>,
+}
+
+/// A virtual pen tablet sized like the phone's drawing pad.
+pub struct Tablet {
+    device: Device,
+    rubber: bool,
+}
+
+impl Tablet {
+    /// `resolution_*` are dots per millimetre, as the phone reports them.
+    pub fn open(width: i32, height: i32, resolution_x: i32, resolution_y: i32) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new().write(true).open("/dev/uinput")?;
+        let fd = file.as_raw_fd();
+        let ioctl = |request: u64, value: libc::c_ulong| -> std::io::Result<()> {
+            // SAFETY: uinput ioctls taking an int on an open uinput descriptor.
+            let rc = unsafe { libc::ioctl(fd, request as libc::c_ulong, value) };
+            if rc < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+        };
+        ioctl(UI_SET_EVBIT, libc::c_ulong::from(EV_KEY))?;
+        ioctl(UI_SET_EVBIT, libc::c_ulong::from(EV_ABS))?;
+        for code in [BTN_TOOL_PEN, BTN_TOOL_RUBBER, BTN_TOUCH] {
+            ioctl(UI_SET_KEYBIT, libc::c_ulong::from(code))?;
+        }
+        for (code, maximum, resolution) in [
+            (ABS_X, width.max(1), resolution_x.max(1)),
+            (ABS_Y, height.max(1), resolution_y.max(1)),
+            (ABS_PRESSURE, PRESSURE_MAX, 0),
+        ] {
+            ioctl(UI_SET_ABSBIT, libc::c_ulong::from(code))?;
+            let setup = UinputAbsSetup { code, _pad: 0, value: 0, minimum: 0, maximum, fuzz: 0, flat: 0, resolution };
+            // SAFETY: UI_ABS_SETUP with a correctly laid out `uinput_abs_setup`.
+            if unsafe { libc::ioctl(fd, UI_ABS_SETUP as libc::c_ulong, &raw const setup) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        let mut setup = UinputSetup {
+            bustype: 0x06,
+            vendor: 0x1d6b,
+            product: 0x0105,
+            version: 1,
+            name: [0; 80],
+            ff_effects_max: 0,
+        };
+        let name = b"Glide Phone drawing tablet";
+        setup.name[..name.len()].copy_from_slice(name);
+        // SAFETY: UI_DEV_SETUP / UI_DEV_CREATE on the configured descriptor.
+        unsafe {
+            if libc::ioctl(fd, UI_DEV_SETUP as libc::c_ulong, &raw const setup) < 0
+                || libc::ioctl(fd, UI_DEV_CREATE as libc::c_ulong) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Ok(Self { device: Device(file), rubber: false })
+    }
+
+    pub fn report(&mut self, event: PenEvent) -> std::io::Result<()> {
+        if let Some(rubber) = event.rubber {
+            if rubber != self.rubber && event.active != Some(false) {
+                // Switching ends: the old tool leaves before the new one arrives.
+                self.device.emit(EV_KEY, if self.rubber { BTN_TOOL_RUBBER } else { BTN_TOOL_PEN }, 0)?;
+            }
+            self.rubber = rubber;
+        }
+        let tool = if self.rubber { BTN_TOOL_RUBBER } else { BTN_TOOL_PEN };
+        if let Some(x) = event.x {
+            self.device.emit(EV_ABS, ABS_X, x)?;
+        }
+        if let Some(y) = event.y {
+            self.device.emit(EV_ABS, ABS_Y, y)?;
+        }
+        if let Some(pressure) = event.pressure {
+            self.device.emit(EV_ABS, ABS_PRESSURE, (pressure.clamp(0.0, 1.0) * f64::from(PRESSURE_MAX)) as i32)?;
+        }
+        if let Some(active) = event.active {
+            self.device.emit(EV_KEY, tool, i32::from(active))?;
+        } else if event.rubber.is_some() {
+            self.device.emit(EV_KEY, tool, 1)?;
+        }
+        if let Some(touching) = event.touching {
+            self.device.emit(EV_KEY, BTN_TOUCH, i32::from(touching))?;
+        }
+        self.device.sync()
+    }
+}
+
+#[cfg(test)]
+mod tablet_tests {
+    use super::*;
+
+    #[test]
+    fn the_abs_setup_matches_the_kernel_layout() {
+        assert_eq!(std::mem::size_of::<UinputAbsSetup>(), 28);
+    }
+
+    #[test]
+    #[ignore = "creates a real input device; run by hand"]
+    fn the_virtual_tablet_can_be_created() {
+        assert!(Tablet::open(1080, 1920, 16, 16).is_ok());
+    }
+}
