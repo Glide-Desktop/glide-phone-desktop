@@ -128,6 +128,8 @@ impl PhoneService {
                 "kdeconnect.notification".to_string(),
                 "kdeconnect.telephony.request_mute".to_string(),
                 "kdeconnect.sftp.request".to_string(),
+                "kdeconnect.mousepad.echo".to_string(),
+                "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
                 "kdeconnect.clipboard.connect".to_string(),

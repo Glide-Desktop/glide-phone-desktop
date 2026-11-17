@@ -67,6 +67,11 @@ pub struct PhoneManager {
     clipboard: Option<(String, i64)>,
     presenter_events: VecDeque<(String, PresenterEvent)>,
     pub commands: crate::plugins::runcommand::Commands,
+    /// The virtual mouse/keyboard the phones drive (created on first use). Only the daemon
+    /// turns it on ([`PhoneManager::enable_remote_input`]); tests never touch real input.
+    input: Option<crate::input::RemoteInput>,
+    remote_input: bool,
+    mousepad: crate::plugins::mousepad::Mousepad,
     /// The phones' media players, by device.
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// Set when a phone asked to set commands up here; the window opens that section.
@@ -115,6 +120,9 @@ impl PhoneManager {
             commands: crate::plugins::runcommand::Commands::load(commands_path),
             commands_setup_requested: false,
             phone_media: HashMap::new(),
+            input: None,
+            remote_input: false,
+            mousepad: crate::plugins::mousepad::Mousepad::default(),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -203,9 +211,18 @@ impl PhoneManager {
         self.notify.notify_waiters();
     }
 
+    /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
+    pub fn enable_remote_input(&mut self) {
+        self.remote_input = crate::input::RemoteInput::available();
+        if !self.remote_input {
+            tracing::info!("/dev/uinput is not writable; phones can only send presenter keys");
+        }
+    }
+
     /// What our plugins send when a paired phone connects (their `onCreate` in KDE Connect).
     fn greeting(&self) -> Vec<NetworkPacket> {
-        let mut packets = vec![self.commands.list_packet()];
+        let mut packets =
+            vec![self.commands.list_packet(), crate::plugins::mousepad::keyboard_state_packet(self.remote_input)];
         if let Some((content, timestamp)) = &self.clipboard
             && *timestamp > 0
         {
@@ -639,6 +656,18 @@ impl PhoneManager {
                         self.clipboard = Some((clipboard.content, timestamp));
                         self.notify.notify_waiters();
                     }
+                }
+                true
+            }
+            crate::plugins::mousepad::PACKET_TYPE_MOUSEPAD_REQUEST if self.remote_input => {
+                let plan = self.mousepad.plan(&packet.body);
+                let input = self.input.get_or_insert_with(crate::input::RemoteInput::start);
+                input.send(plan.actions);
+                if let Some(text) = plan.text {
+                    crate::plugins::mousepad::type_text(text, input);
+                }
+                if let Some(echo) = crate::plugins::mousepad::echo(&packet.body) {
+                    self.send_to_device(device_id, echo);
                 }
                 true
             }

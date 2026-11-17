@@ -2,6 +2,7 @@ pub mod battery;
 pub mod clipboard;
 pub mod connectivity;
 pub mod find_device;
+pub mod mousepad;
 pub mod mpris;
 pub mod notifications;
 pub mod presenter;

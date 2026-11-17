@@ -135,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 /// Follows this computer's state that phones mirror: media players and the clipboard.
 fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex<glide_phone::PhoneManager>>) {
+    rt.block_on(async { manager.lock().await.enable_remote_input() });
     let manager = manager.clone();
     let _guard = rt.enter();
     rt.spawn(glide_phone::plugins::remote_media::run_exports(manager.clone(), None));
