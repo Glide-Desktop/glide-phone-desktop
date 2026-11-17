@@ -1,6 +1,7 @@
 pub mod battery;
 pub mod clipboard;
 pub mod connectivity;
+pub mod contacts;
 pub mod digitizer;
 pub mod find_device;
 pub mod mousepad;

@@ -120,6 +120,8 @@ impl PhoneService {
                 "kdeconnect.sftp".to_string(),
                 "kdeconnect.digitizer.session".to_string(),
                 "kdeconnect.digitizer".to_string(),
+                "kdeconnect.contacts.response_uids_timestamps".to_string(),
+                "kdeconnect.contacts.response_vcards".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -131,6 +133,8 @@ impl PhoneService {
                 "kdeconnect.telephony.request_mute".to_string(),
                 "kdeconnect.sftp.request".to_string(),
                 "kdeconnect.mousepad.echo".to_string(),
+                "kdeconnect.contacts.request_all_uids_timestamps".to_string(),
+                "kdeconnect.contacts.request_vcards_by_uid".to_string(),
                 "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),

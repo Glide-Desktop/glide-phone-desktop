@@ -579,6 +579,21 @@ impl PhoneManager {
         true
     }
 
+    fn handle_call(&self, device_id: &str, device_name: &str, packet: &NetworkPacket) {
+        // Name the caller from the synced address book when the phone sent only a number.
+        let mut body = packet.body.clone();
+        if body.get("contactName").and_then(serde_json::Value::as_str).is_none_or(str::is_empty)
+            && let Some(number) = body.get("phoneNumber").and_then(serde_json::Value::as_str)
+            && let Some(name) = crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(device_id))
+                .get(&crate::plugins::contacts::number_key(number))
+                .cloned()
+            && let serde_json::Value::Object(map) = &mut body
+        {
+            map.insert("contactName".into(), serde_json::json!(name));
+        }
+        crate::plugins::telephony::handle(device_id, device_name, &body, self.senders.get(device_id).cloned());
+    }
+
     /// Packets of the plugins beyond the original set (run command, media, volume, calls).
     fn handle_feature_packet(
         &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
@@ -598,6 +613,18 @@ impl PhoneManager {
                 if let Some(digitizer) = &self.digitizer {
                     digitizer.pen(crate::plugins::digitizer::parse_event(&packet.body));
                 }
+                true
+            }
+            crate::plugins::contacts::PACKET_TYPE_RESPONSE_UIDS => {
+                let dir = crate::plugins::contacts::book_dir(device_id);
+                if let Some(request) = crate::plugins::contacts::on_uids(&dir, &packet.body) {
+                    self.send_to_device(device_id, request);
+                }
+                true
+            }
+            crate::plugins::contacts::PACKET_TYPE_RESPONSE_VCARDS => {
+                crate::plugins::contacts::on_vcards(&crate::plugins::contacts::book_dir(device_id), &packet.body);
+                self.notify.notify_waiters();
                 true
             }
             crate::plugins::connectivity::PACKET_TYPE_CONNECTIVITY_REPORT => {
@@ -626,12 +653,7 @@ impl PhoneManager {
                 true
             }
             crate::plugins::telephony::PACKET_TYPE_TELEPHONY => {
-                crate::plugins::telephony::handle(
-                    device_id,
-                    device_name,
-                    &packet.body,
-                    self.senders.get(device_id).cloned(),
-                );
+                self.handle_call(device_id, device_name, packet);
                 true
             }
             crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST => {
