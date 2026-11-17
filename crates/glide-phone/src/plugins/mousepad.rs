@@ -111,21 +111,19 @@ impl Mousepad {
             plan.actions.push(Action::Tap { code, modifiers });
         }
         if let Some(key) = body.get("key").and_then(Json::as_str).filter(|k| !k.is_empty()) {
-            let shortcut = modifiers.iter().any(Option::is_some);
-            let mut typed = Vec::new();
-            let all_ascii = key.chars().all(|c| crate::input::ascii_key(c).is_some());
-            if all_ascii {
+            if modifiers.iter().any(Option::is_some) {
+                // Shortcuts (Ctrl+C, ...) go by key position, like a hardware keyboard.
                 for c in key.chars() {
-                    if let Some((code, shift)) = crate::input::ascii_key(c) {
-                        let mut mods = if shortcut { modifiers } else { [None; 4] };
+                    if let Some((code, shift)) = crate::input::ascii_key(c.to_ascii_lowercase()) {
+                        let mut mods = modifiers;
                         if shift {
                             mods[2] = Some(KEY_LEFTSHIFT);
                         }
-                        typed.push(Action::Tap { code, modifiers: mods });
+                        plan.actions.push(Action::Tap { code, modifiers: mods });
                     }
                 }
-                plan.actions.extend(typed);
             } else {
+                // Text goes through the typist, whatever the keyboard layout.
                 plan.text = Some(key.to_string());
             }
         }
@@ -152,25 +150,83 @@ pub fn keyboard_state_packet(available: bool) -> NetworkPacket {
     NetworkPacket::new(PACKET_TYPE_MOUSEPAD_KEYBOARDSTATE, json!({ "state": available }))
 }
 
-/// Types text no US key code covers (e.g. Cyrillic): `wtype`, else paste it.
-pub fn type_text(text: String, input: &crate::input::RemoteInput) {
-    if tokio::runtime::Handle::try_current().is_err() {
+/// Types text in order on one thread: the Wayland virtual keyboard (layout independent),
+/// else US key codes for ASCII, else one paste at a time.
+pub struct Typist {
+    queue: Option<std::sync::mpsc::Sender<String>>,
+}
+
+impl Typist {
+    #[must_use]
+    pub fn start(input: Option<std::sync::mpsc::Sender<Vec<Action>>>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<String>();
+        let spawned = std::thread::Builder::new().name("glide-phone-typist".into()).spawn(move || {
+            let mut keyboard: Option<crate::vkbd::VirtualKeyboard> = None;
+            let mut tried = false;
+            while let Ok(mut text) = receiver.recv() {
+                // The phone sends one character per packet: what arrives together is typed
+                // together (one paste instead of dozens when we have to paste).
+                while let Ok(more) = receiver.recv_timeout(std::time::Duration::from_millis(40)) {
+                    text.push_str(&more);
+                    if text.len() > 4096 {
+                        break;
+                    }
+                }
+                if keyboard.is_none() && !tried {
+                    keyboard = crate::vkbd::VirtualKeyboard::connect();
+                    tried = true;
+                    if keyboard.is_none() {
+                        tracing::info!("no Wayland virtual keyboard; typing falls back to key codes / paste");
+                    }
+                }
+                if let Some(kb) = keyboard.as_mut() {
+                    if kb.type_text(&text) {
+                        continue;
+                    }
+                    keyboard = None;
+                    tried = false;
+                }
+                fallback(&text, input.as_ref());
+            }
+        });
+        Self { queue: spawned.ok().map(|_| sender) }
+    }
+
+    pub fn type_text(&self, text: String) {
+        if let Some(queue) = &self.queue {
+            let _ = queue.send(text);
+        }
+    }
+}
+
+fn fallback(text: &str, input: Option<&std::sync::mpsc::Sender<Vec<Action>>>) {
+    let Some(input) = input else { return };
+    let ascii: Option<Vec<Action>> = text
+        .chars()
+        .map(|c| {
+            crate::input::ascii_key(c).map(|(code, shift)| Action::Tap {
+                code,
+                modifiers: [None, None, shift.then_some(KEY_LEFTSHIFT), None],
+            })
+        })
+        .collect();
+    if let Some(actions) = ascii {
+        let _ = input.send(actions);
         return;
     }
-    let paste = [Action::Tap { code: KEY_V, modifiers: [Some(KEY_LEFTCTRL), None, None, None] }];
-    let queue = input.clone_queue();
-    tokio::spawn(async move {
-        let typed = tokio::process::Command::new("wtype").arg("--").arg(&text).status().await;
-        if typed.is_ok_and(|status| status.success()) {
-            return;
-        }
-        if crate::plugins::share::copy_text(&text).await {
-            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            if let Some(queue) = queue {
-                let _ = queue.send(paste.to_vec());
-            }
-        }
-    });
+    // Last resort: paste it (this replaces the clipboard).
+    let copied = std::process::Command::new("wl-copy")
+        .arg("--")
+        .arg(text)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if copied {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let _ = input.send(vec![Action::Tap { code: KEY_V, modifiers: [Some(KEY_LEFTCTRL), None, None, None] }]);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
 }
 
 #[cfg(test)]
@@ -197,6 +253,7 @@ mod tests {
         let ctrl_c = pad.plan(&json!({"key": "c", "ctrl": true})).actions;
         assert_eq!(ctrl_c, [Action::Tap { code: 46, modifiers: [Some(KEY_LEFTCTRL), None, None, None] }]);
         assert_eq!(pad.plan(&json!({"key": "Привіт"})).text.as_deref(), Some("Привіт"));
+        assert_eq!(pad.plan(&json!({"key": "a"})).text.as_deref(), Some("a"), "plain text is typed, not key codes");
     }
 
     #[test]

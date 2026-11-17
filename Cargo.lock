@@ -1435,6 +1435,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-misc",
  "zbus",
 ]
 

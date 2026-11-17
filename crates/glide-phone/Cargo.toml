@@ -28,6 +28,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true }
 zbus.workspace = true
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 
 [dev-dependencies]
 glide-app = { workspace = true, features = ["test-bus"] }

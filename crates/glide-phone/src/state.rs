@@ -74,6 +74,7 @@ pub struct PhoneManager {
     input: Option<crate::input::RemoteInput>,
     remote_input: bool,
     mousepad: crate::plugins::mousepad::Mousepad,
+    typist: Option<crate::plugins::mousepad::Typist>,
     digitizer: Option<crate::plugins::digitizer::Digitizer>,
     /// The phones' text messages, by device.
     pub sms: HashMap<String, crate::plugins::sms::Inbox>,
@@ -130,6 +131,7 @@ impl PhoneManager {
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
+            typist: None,
             digitizer: None,
             notify: Arc::new(Notify::new()),
         }
@@ -798,7 +800,8 @@ impl PhoneManager {
                 let input = self.input.get_or_insert_with(crate::input::RemoteInput::start);
                 input.send(plan.actions);
                 if let Some(text) = plan.text {
-                    crate::plugins::mousepad::type_text(text, input);
+                    let queue = input.clone_queue();
+                    self.typist.get_or_insert_with(|| crate::plugins::mousepad::Typist::start(queue)).type_text(text);
                 }
                 if let Some(echo) = crate::plugins::mousepad::echo(&packet.body) {
                     self.send_to_device(device_id, echo);

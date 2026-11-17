@@ -14,6 +14,7 @@ pub mod service;
 pub mod sound;
 pub mod state;
 pub mod ui;
+pub mod vkbd;
 
 pub use config::{PairedDevice, PhoneConfig};
 pub use crypto::cert::{IdentityCert, compute_fingerprint};
