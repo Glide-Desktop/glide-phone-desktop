@@ -1629,7 +1629,7 @@ fn the_cursor_goes_over_to_the_phone_at_the_edge_and_comes_back() {
 }
 
 /// The top-bar applet (glide-shell, crates/glide-compositor/src/phone_applet.rs) reads
-/// ListDevicesJson every 2 s and on StateChanged. This parses our output by its rules (same
+/// `ListDevicesJson` every 2 s and on `StateChanged`. This parses our output by its rules (same
 /// fields, same choice of device) so a change on this side can't silently break it.
 #[test]
 fn the_top_bar_applet_sees_every_battery_change() {
