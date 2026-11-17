@@ -141,6 +141,7 @@ impl PhoneService {
                 "kdeconnect.sms.request".to_string(),
                 "kdeconnect.sms.request_conversations".to_string(),
                 "kdeconnect.sms.request_conversation".to_string(),
+                "glide.wol".to_string(),
                 "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
