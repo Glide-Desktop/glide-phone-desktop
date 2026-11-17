@@ -103,6 +103,7 @@ impl PhoneService {
             incoming_capabilities: vec![
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
+                "kdeconnect.clipboard.connect".to_string(),
                 "kdeconnect.notification".to_string(),
                 "kdeconnect.presenter".to_string(),
                 "kdeconnect.mousepad.request".to_string(),
@@ -116,6 +117,7 @@ impl PhoneService {
                 "kdeconnect.runcommand.output".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),
+                "kdeconnect.clipboard.connect".to_string(),
                 "kdeconnect.notification.reply".to_string(),
                 "kdeconnect.notification.action".to_string(),
                 "kdeconnect.notification.request".to_string(),

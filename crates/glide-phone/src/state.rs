@@ -198,7 +198,29 @@ impl PhoneManager {
 
     /// What our plugins send when a paired phone connects (their `onCreate` in KDE Connect).
     fn greeting(&self) -> Vec<NetworkPacket> {
-        vec![self.commands.list_packet()]
+        let mut packets = vec![self.commands.list_packet()];
+        if let Some((content, timestamp)) = &self.clipboard
+            && *timestamp > 0
+        {
+            packets.push(crate::plugins::clipboard::create_connect_packet(content, *timestamp));
+        }
+        packets
+    }
+
+    /// This computer's clipboard changed: remember it and send it to connected phones.
+    pub fn local_clipboard_changed(&mut self, content: String) {
+        if self.clipboard.as_ref().is_some_and(|(current, _)| *current == content) {
+            return; // what we just applied from the phone, or no real change
+        }
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        let packet = create_clipboard_packet(&content, timestamp);
+        self.clipboard = Some((content, timestamp));
+        for (id, sender) in &self.senders {
+            if self.is_paired(id) {
+                let _ = sender.send(packet.clone());
+            }
+        }
+        self.notify.notify_waiters();
     }
 
     pub fn greet(&self, device_id: &str) {
@@ -387,8 +409,13 @@ impl PhoneManager {
 
     fn handle_aux_packet(&mut self, device_id: &str, packet: &NetworkPacket, device_name: &str) -> bool {
         match packet.packet_type.as_str() {
-            PACKET_TYPE_CLIPBOARD => {
+            PACKET_TYPE_CLIPBOARD | crate::plugins::clipboard::PACKET_TYPE_CLIPBOARD_CONNECT => {
                 if let Ok(clipboard) = handle_clipboard_packet(packet) {
+                    // On connect an unknown (0) timestamp never wins.
+                    let connect = packet.packet_type == crate::plugins::clipboard::PACKET_TYPE_CLIPBOARD_CONNECT;
+                    if connect && clipboard.timestamp.unwrap_or(0) <= 0 {
+                        return true;
+                    }
                     let timestamp = clipboard.timestamp.unwrap_or(packet.id);
                     if self.clipboard.as_ref().is_none_or(|(_, current)| timestamp >= *current) {
                         if self.clipboard.as_ref().is_none_or(|(current, _)| *current != clipboard.content) {

@@ -71,6 +71,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let service = Arc::new(service);
 
     set_global_manager(service.manager());
+    {
+        let manager = service.manager();
+        let _guard = rt.enter();
+        glide_phone::plugins::clipboard::watch(move |text| {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.lock().await.local_clipboard_changed(text) });
+        });
+    }
 
     let _dbus_conn = rt.block_on(start_dbus_service(service.manager()))?;
 

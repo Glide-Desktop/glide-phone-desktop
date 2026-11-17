@@ -1230,3 +1230,34 @@ async fn the_phone_lists_runs_and_reads_the_output_of_commands() {
     commands.remove(&key);
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn the_computers_clipboard_follows_to_paired_phones_and_newer_wins_on_connect() {
+    use glide_phone::config::PairedDevice;
+    use glide_phone::plugins::clipboard::PACKET_TYPE_CLIPBOARD_CONNECT;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    while sent.try_recv().is_ok() {} // the greeting
+
+    manager.local_clipboard_changed("скопійовано".to_string());
+    let packet = sent.try_recv().expect("clipboard sent");
+    assert_eq!(packet.packet_type, PACKET_TYPE_CLIPBOARD);
+    assert_eq!(packet.body["content"], "скопійовано");
+    manager.local_clipboard_changed("скопійовано".to_string());
+    assert!(sent.try_recv().is_err(), "an unchanged clipboard is not resent");
+
+    // A reconnect offers ours with its timestamp.
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    let greeting: Vec<_> = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+    let connect = greeting.iter().find(|p| p.packet_type == PACKET_TYPE_CLIPBOARD_CONNECT).expect("connect packet");
+    assert!(connect.body["timestamp"].as_i64().unwrap() > 0);
+
+    // The phone's connect clipboard with an unknown timestamp never replaces ours.
+    let stale = NetworkPacket::new(PACKET_TYPE_CLIPBOARD_CONNECT, json!({"content": "old", "timestamp": 0}));
+    manager.handle_packet("pinned", &stale).expect("handled");
+    assert_eq!(manager.clipboard_text().as_deref(), Some("скопійовано"));
+}
