@@ -175,12 +175,20 @@ impl PhoneService {
             }
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
-                let has_connected = {
+                // Keep announcing while any paired phone is away (not only when none is
+                // connected), and also straight to where each one was last seen: routers often
+                // drop broadcasts, and a unicast identity makes the phone dial back.
+                let (has_connected, missing) = {
                     let mgr = mgr_broadcast.lock().await;
-                    mgr.has_any_connection()
+                    (mgr.has_any_connection(), mgr.away_paired_addresses())
                 };
-                if !has_connected && let Err(err) = broadcast_identity(&socket_send, &id_clone, &ips).await {
+                if (!has_connected || !missing.is_empty())
+                    && let Err(err) = broadcast_identity(&socket_send, &id_clone, &ips).await
+                {
                     tracing::warn!(%err, "phone discovery broadcast failed");
+                }
+                for ip in missing {
+                    let _ = send_direct_discovery(&socket_send, &id_clone, ip).await;
                 }
             }
         });
@@ -366,6 +374,7 @@ impl PhoneService {
             return Err("the device is not admitted: too many unpaired devices, or an unusable id".into());
         };
         tracing::info!(%peer_addr, %peer_id, "phone session established");
+        self.manager.lock().await.remember_address(&peer_id, peer_addr.ip());
 
         if let Some(battery_pkt) = local_battery_packet() {
             let _ = packet_stream.send_packet(&battery_pkt).await;

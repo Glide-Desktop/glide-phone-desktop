@@ -1533,3 +1533,18 @@ async fn a_second_daemon_cannot_take_the_bus_name_and_learns_it_at_once() {
         .expect("answered promptly, not queued");
     assert!(second.is_err(), "the second daemon must fail so main() exits");
 }
+
+#[test]
+fn a_paired_phone_that_went_away_is_called_back_where_it_was() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, _sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender.clone(), Some("AA".to_string()));
+    let ip: std::net::IpAddr = "192.168.1.72".parse().unwrap();
+    manager.remember_address("pinned", ip);
+    assert!(manager.away_paired_addresses().is_empty(), "connected now");
+    manager.unregister_connection("pinned", &sender.downgrade());
+    assert_eq!(manager.away_paired_addresses(), [ip]);
+}

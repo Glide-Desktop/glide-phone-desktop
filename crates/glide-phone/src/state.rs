@@ -76,6 +76,8 @@ pub struct PhoneManager {
     mousepad: crate::plugins::mousepad::Mousepad,
     typist: Option<crate::plugins::mousepad::Typist>,
     digitizer: Option<crate::plugins::digitizer::Digitizer>,
+    /// Where each phone was last connected from (for unicast rediscovery).
+    last_addresses: HashMap<String, std::net::IpAddr>,
     /// The phones' text messages, by device.
     pub sms: HashMap<String, crate::plugins::sms::Inbox>,
     /// The phones' media players, by device.
@@ -128,6 +130,7 @@ impl PhoneManager {
             commands_setup_requested: false,
             phone_media: HashMap::new(),
             sms: HashMap::new(),
+            last_addresses: HashMap::new(),
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
@@ -220,6 +223,20 @@ impl PhoneManager {
         }
         self.senders.insert(device_id, sender);
         self.notify.notify_waiters();
+    }
+
+    pub fn remember_address(&mut self, device_id: &str, ip: std::net::IpAddr) {
+        self.last_addresses.insert(device_id.to_string(), ip);
+    }
+
+    /// Last addresses of paired phones that are not connected now.
+    #[must_use]
+    pub fn away_paired_addresses(&self) -> Vec<std::net::IpAddr> {
+        self.last_addresses
+            .iter()
+            .filter(|(id, _)| self.is_paired(id) && !self.is_connected(id))
+            .map(|(_, ip)| *ip)
+            .collect()
     }
 
     /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
