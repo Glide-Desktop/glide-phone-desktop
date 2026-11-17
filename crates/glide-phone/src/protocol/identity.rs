@@ -81,7 +81,15 @@ pub struct IdentityBody {
     pub incoming_capabilities: Vec<String>,
     #[serde(rename = "outgoingCapabilities", default)]
     pub outgoing_capabilities: Vec<String>,
+    /// Set by Glide Phone apps (`GLIDE_PROTOCOL`); KDE Connect peers leave it out and
+    /// ignore it, so the marker is invisible to them.
+    #[serde(rename = "glideProtocol", skip_serializing_if = "Option::is_none", default)]
+    pub glide_protocol: Option<u32>,
 }
+
+/// Version of the Glide extensions announced in every identity packet. The Glide Phone
+/// Android app only talks to peers that announce it; KDE Connect peers never do.
+pub const GLIDE_PROTOCOL: u32 = 1;
 
 impl IdentityBody {
     pub fn to_packet(&self) -> Result<NetworkPacket, serde_json::Error> {
@@ -104,6 +112,7 @@ impl IdentityBody {
                 "protocolVersion": PROTOCOL_VERSION,
                 "targetDeviceId": target_device_id,
                 "targetProtocolVersion": PROTOCOL_VERSION,
+                "glideProtocol": GLIDE_PROTOCOL,
             }),
         ))
     }
@@ -118,6 +127,7 @@ impl IdentityBody {
                 "deviceName": device_name,
                 "protocolVersion": PROTOCOL_VERSION,
                 "tcpPort": tcp_port,
+                "glideProtocol": GLIDE_PROTOCOL,
             }),
         ))
     }

@@ -99,6 +99,7 @@ impl PhoneService {
             tcp_port: Some(self.tcp_port),
             target_device_id: None,
             target_protocol_version: None,
+            glide_protocol: Some(crate::protocol::identity::GLIDE_PROTOCOL),
             incoming_capabilities: vec![
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),

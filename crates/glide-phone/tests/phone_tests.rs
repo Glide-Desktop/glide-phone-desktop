@@ -38,6 +38,7 @@ fn identity_packet_roundtrip() {
         target_protocol_version: None,
         incoming_capabilities: vec!["kdeconnect.battery".to_string()],
         outgoing_capabilities: vec!["kdeconnect.battery".to_string()],
+        glide_protocol: None,
     };
 
     let packet = identity.to_packet().expect("to packet");
@@ -1040,6 +1041,7 @@ async fn android_style_string_version_completes_incoming_handshake() {
         target_protocol_version: None,
         incoming_capabilities: vec![],
         outgoing_capabilities: vec![],
+        glide_protocol: None,
     };
     packets.send_packet(&identity.to_packet().unwrap()).await.unwrap();
     assert_eq!(packets.next_packet().await.unwrap().unwrap().packet_type, "kdeconnect.identity");
@@ -1093,4 +1095,19 @@ async fn tls_rejects_certificate_without_matching_private_key() {
         TlsConnector::from(Arc::new(client)).connect(ServerName::try_from("kdeconnect").unwrap(), stream).await;
     assert!(result.is_err(), "a pinned certificate must not authenticate without its private key");
     server_task.await.unwrap();
+}
+
+#[test]
+fn identity_marks_glide_and_kde_peers_apart() {
+    // A KDE Connect phone sends no marker and still parses.
+    let kde = NetworkPacket::new(
+        "kdeconnect.identity",
+        serde_json::json!({"deviceId": "kde_phone_1234567890abcdef1234567890", "deviceName": "KDE", "protocolVersion": 8}),
+    );
+    assert_eq!(IdentityBody::from_packet(&kde).expect("kde identity").glide_protocol, None);
+    // Every identity we send carries it, before TLS too.
+    let discovery = IdentityBody::new_discovery_packet("id", "Desk", 1716).expect("discovery");
+    assert_eq!(discovery.body["glideProtocol"], glide_phone::protocol::identity::GLIDE_PROTOCOL);
+    let dial = IdentityBody::new_connection_packet("id", "Desk", "peer").expect("dial");
+    assert_eq!(dial.body["glideProtocol"], glide_phone::protocol::identity::GLIDE_PROTOCOL);
 }
