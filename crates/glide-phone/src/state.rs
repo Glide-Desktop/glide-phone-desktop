@@ -524,6 +524,62 @@ impl PhoneManager {
         true
     }
 
+    /// Packets of the plugins beyond the original set (run command, media, volume, calls).
+    fn handle_feature_packet(
+        &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
+    ) -> bool {
+        match packet.packet_type.as_str() {
+            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
+                self.handle_phone_media(device_id, packet, payload);
+                true
+            }
+            crate::plugins::telephony::PACKET_TYPE_TELEPHONY => {
+                crate::plugins::telephony::handle(
+                    device_id,
+                    device_name,
+                    &packet.body,
+                    self.senders.get(device_id).cloned(),
+                );
+                true
+            }
+            crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST => {
+                if let Some(sender) = self.senders.get(device_id).cloned()
+                    && tokio::runtime::Handle::try_current().is_ok()
+                {
+                    let body = packet.body.clone();
+                    tokio::spawn(async move { crate::plugins::systemvolume::handle_request(&body, &sender).await });
+                }
+                true
+            }
+            crate::plugins::mpris::PACKET_TYPE_MPRIS_REQUEST => {
+                if let Some(sender) = self.senders.get(device_id).cloned()
+                    && tokio::runtime::Handle::try_current().is_ok()
+                {
+                    let sink = crate::plugins::mpris::Sink {
+                        sender,
+                        cert: self.cert.clone(),
+                        fingerprint: self.devices.get(device_id).and_then(|d| d.peer_fingerprint.clone()),
+                    };
+                    let body = packet.body.clone();
+                    tokio::spawn(async move {
+                        if let Some(conn) = crate::plugins::mpris::session().await {
+                            crate::plugins::mpris::handle_request(&conn, &body, &sink).await;
+                        }
+                    });
+                }
+                true
+            }
+            crate::plugins::runcommand::PACKET_TYPE_RUNCOMMAND_REQUEST => {
+                if self.commands.handle_request(packet, self.senders.get(device_id)) {
+                    self.commands_setup_requested = true;
+                    self.notify.notify_waiters();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn handle_aux_packet(
         &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
     ) -> bool {
@@ -577,51 +633,13 @@ impl PhoneManager {
                 }
                 true
             }
-            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
-                self.handle_phone_media(device_id, packet, payload);
-                true
-            }
-            crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST => {
-                if let Some(sender) = self.senders.get(device_id).cloned()
-                    && tokio::runtime::Handle::try_current().is_ok()
-                {
-                    let body = packet.body.clone();
-                    tokio::spawn(async move { crate::plugins::systemvolume::handle_request(&body, &sender).await });
-                }
-                true
-            }
-            crate::plugins::mpris::PACKET_TYPE_MPRIS_REQUEST => {
-                if let Some(sender) = self.senders.get(device_id).cloned()
-                    && tokio::runtime::Handle::try_current().is_ok()
-                {
-                    let sink = crate::plugins::mpris::Sink {
-                        sender,
-                        cert: self.cert.clone(),
-                        fingerprint: self.devices.get(device_id).and_then(|d| d.peer_fingerprint.clone()),
-                    };
-                    let body = packet.body.clone();
-                    tokio::spawn(async move {
-                        if let Some(conn) = crate::plugins::mpris::session().await {
-                            crate::plugins::mpris::handle_request(&conn, &body, &sink).await;
-                        }
-                    });
-                }
-                true
-            }
-            crate::plugins::runcommand::PACKET_TYPE_RUNCOMMAND_REQUEST => {
-                if self.commands.handle_request(packet, self.senders.get(device_id)) {
-                    self.commands_setup_requested = true;
-                    self.notify.notify_waiters();
-                }
-                true
-            }
             PACKET_TYPE_SHARE_REQUEST => {
                 if let Ok(share) = handle_share_packet(packet) {
                     crate::plugins::share::deliver(device_name, share);
                 }
                 true
             }
-            _ => false,
+            _ => self.handle_feature_packet(device_id, packet, device_name, payload),
         }
     }
 

@@ -19,6 +19,9 @@ glide_sdk::catalogue! {
     SentTo => "Sent to {device}", "Надіслано на {device}";
     FilesSent => "Files sent: {count}", "Надіслано файлів: {count}";
     FilesFailed => "Could not send {count} of the files", "Не вдалося надіслати файлів: {count}";
+    IncomingCall => "Incoming call from {caller}", "Вхідний дзвінок: {caller}";
+    MissedCall => "Missed call from {caller}", "Пропущений дзвінок: {caller}";
+    MuteCall => "Mute", "Вимкнути звук";
 }
 
 #[must_use]

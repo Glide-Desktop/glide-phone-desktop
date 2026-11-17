@@ -9,6 +9,7 @@ pub mod runcommand;
 pub mod send_notifications;
 pub mod share;
 pub mod systemvolume;
+pub mod telephony;
 
 pub use battery::{BatteryPayload, BatteryState, handle_battery_packet, local_battery_packet};
 pub use clipboard::{ClipboardPayload, create_clipboard_packet, handle_clipboard_packet};
