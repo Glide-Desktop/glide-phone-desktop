@@ -276,6 +276,7 @@ impl PhoneManager {
         } else {
             self.share_input.receivers.remove(device_id);
         }
+        self.refresh_share_input();
     }
 
     /// The screen edge the phone sits on, when sharing the cursor is on.
@@ -285,15 +286,42 @@ impl PhoneManager {
     }
 
     /// Turns sharing the cursor on at `edge` (or off) and remembers it.
+    /// Returns false (and keeps the old setting) when the strip can't be shown.
     pub fn set_share_input_edge(&mut self, edge: Option<crate::edge::Edge>) -> bool {
+        let previous = self.share_input.edge;
         self.share_input.edge = edge;
+        self.apply_share_input();
+        if self.wants_strip() && self.share_input.capture.is_none() {
+            self.share_input.edge = previous;
+            self.apply_share_input();
+            return false;
+        }
         if let Some(path) = &self.share_input.path {
             let text = edge.map_or("", crate::edge::Edge::name);
             let _ = glide_config::write_atomic(path, text.as_bytes(), 0o600);
         }
-        self.apply_share_input();
         self.notify.notify_waiters();
-        edge.is_none() || self.share_input.events.is_none() || self.share_input.capture.is_some()
+        true
+    }
+
+    /// A phone that can take the cursor is here: only then is the strip on the edge, so a
+    /// touch of that edge never grabs the pointer and keyboard for nobody.
+    fn wants_strip(&self) -> bool {
+        self.share_input.edge.is_some()
+            && self.share_input.events.is_some()
+            && self.share_input.receivers.iter().any(|id| self.senders.contains_key(id) && self.is_paired(id))
+    }
+
+    /// Shows or removes the strip as phones come and go.
+    fn refresh_share_input(&mut self) {
+        match (self.wants_strip(), self.share_input.capture.is_some()) {
+            (true, false) => self.apply_share_input(),
+            (false, true) => {
+                self.end_share_input();
+                self.share_input.capture = None;
+            }
+            _ => {}
+        }
     }
 
     /// The daemon's side: strip events go to `events` (the window never starts a strip).
@@ -305,6 +333,9 @@ impl PhoneManager {
     fn apply_share_input(&mut self) {
         self.end_share_input();
         self.share_input.capture = None; // removes the old strip
+        if !self.wants_strip() {
+            return;
+        }
         let (Some(edge), Some(events)) = (self.share_input.edge, self.share_input.events.clone()) else { return };
         self.share_input.capture = crate::edge::EdgeCapture::start(edge, move |event| {
             let _ = events.send(event);
@@ -563,6 +594,7 @@ impl PhoneManager {
         if self.share_input.target.as_deref() == Some(device_id) {
             self.end_share_input(); // a phone that went away can't give the cursor back
         }
+        self.refresh_share_input();
         if tokio::runtime::Handle::try_current().is_ok() {
             let id = device_id.to_string();
             tokio::spawn(async move { crate::plugins::sftp::unmount(&id).await });
@@ -707,6 +739,7 @@ impl PhoneManager {
                     .icon("phone-symbolic"),
             );
         }
+        self.refresh_share_input(); // pairing or unpairing changes who may take the cursor
         self.notify.notify_waiters();
     }
 

@@ -721,6 +721,11 @@ mod tests {
         mouse.send(vec![Action::Move(-30, 5)]);
         let moved = rx.recv_timeout(Duration::from_secs(2)).expect("relative motion while captured");
         assert!(matches!(moved, Captured::Motion { dx, .. } if dx < 0.0), "{moved:?}");
+        // The keyboard is taken too: Left Shift (harmless if it went elsewhere) arrives here.
+        while rx.try_recv().is_ok() {}
+        mouse.send(vec![Action::Press(42), Action::Release(42)]);
+        let key = rx.recv_timeout(Duration::from_secs(2)).expect("a key while captured");
+        assert!(matches!(key, Captured::Key { sym: xkb::keysyms::KEY_Shift_L, .. }), "{key:?}");
         capture.release(200);
         std::thread::sleep(Duration::from_millis(200));
         while rx.try_recv().is_ok() {}
