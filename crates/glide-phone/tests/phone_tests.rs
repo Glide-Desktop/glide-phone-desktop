@@ -1390,6 +1390,12 @@ async fn the_phone_sees_and_controls_this_computers_media_players() {
         got_list |= packet.body.get("playerList").is_some();
     }
     assert!(got_list);
+    // The phone can't make us send a file the player doesn't show as its art.
+    handle_request(&conn, &json!({"player": "Плеєр", "albumArtUrl": "file:///etc/hostname"}), &sink).await;
+    assert!(
+        std::iter::from_fn(|| sent.try_recv().ok()).all(|p| p.body.get("transferringAlbumArt").is_none()),
+        "no art payload for a made-up URL"
+    );
 }
 
 #[tokio::test]

@@ -62,7 +62,11 @@ pub async fn refresh(conn: &Connection) -> Vec<String> {
     let names = dbus.list_names().await.unwrap_or_default();
     let mut by_name = BTreeMap::new();
     let mut owners = HashMap::new();
-    for name in names.iter().map(ToString::to_string).filter(|name| name.starts_with(PREFIX)) {
+    // Our own exports of the phone's players are not this computer's players.
+    let ours = format!("{PREFIX}glidephone.");
+    for name in
+        names.iter().map(ToString::to_string).filter(|name| name.starts_with(PREFIX) && !name.starts_with(&ours))
+    {
         let identity = match proxy(conn, &name, ROOT).await {
             Ok(p) => p.get_property::<String>("Identity").await.ok(),
             Err(_) => None,
@@ -208,7 +212,10 @@ pub async fn handle_request(conn: &Connection, body: &Json, sink: &Sink) {
     if let Some(shuffle) = body.get("setShuffle").and_then(Json::as_bool) {
         let _ = player.set_property("Shuffle", shuffle).await;
     }
-    if let Some(url) = body.get("albumArtUrl").and_then(Json::as_str) {
+    if let Some(url) = body.get("albumArtUrl").and_then(Json::as_str)
+        && current_art_url(&player).await.as_deref() == Some(url)
+    {
+        // Only the art the player itself shows; never a path the phone made up.
         send_album_art(name, url, sink).await;
     }
     let wants_state = body.get("requestNowPlaying").and_then(Json::as_bool).unwrap_or(false)
@@ -231,6 +238,13 @@ async fn set_position(player: &Proxy<'_>, position_ms: i64) {
     {
         let _ = player.call_method("SetPosition", &(path, position_ms.max(0) * 1000)).await;
     }
+}
+
+/// The player's own `mpris:artUrl` right now.
+async fn current_art_url(player: &Proxy<'_>) -> Option<String> {
+    let metadata = player.get_property::<OwnedValue>("Metadata").await.ok()?;
+    let Value::Dict(dict) = &*metadata else { return None };
+    dict.iter().find(|(key, _)| text(key).as_deref() == Some("mpris:artUrl")).and_then(|(_, v)| text(v))
 }
 
 /// Local art (`file://`) goes to the phone as a payload, like `AlbumArtCache` expects.
