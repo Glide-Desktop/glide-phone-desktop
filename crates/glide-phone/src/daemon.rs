@@ -192,9 +192,21 @@ impl PhoneDaemon {
 pub async fn start_dbus_service(
     manager: Arc<Mutex<PhoneManager>>,
 ) -> Result<connection::Connection, Box<dyn std::error::Error + Send + Sync>> {
+    start_dbus_service_on(connection::Builder::session()?, manager).await
+}
+
+/// [`start_dbus_service`] on any bus. Fails when another daemon already owns the name: zbus
+/// reports a taken name as `Ok(Exists)`, not as an error, so it is checked here.
+pub async fn start_dbus_service_on(
+    builder: connection::Builder<'_>, manager: Arc<Mutex<PhoneManager>>,
+) -> Result<connection::Connection, Box<dyn std::error::Error + Send + Sync>> {
     let daemon = PhoneDaemon::new(manager.clone());
 
-    let conn = connection::Builder::session()?.name(BUS_NAME)?.serve_at(OBJECT_PATH, daemon)?.build().await?;
+    let conn = builder.serve_at(OBJECT_PATH, daemon)?.build().await?;
+    let reply = conn.request_name_with_flags(BUS_NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into()).await?;
+    if !matches!(reply, zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner) {
+        return Err(format!("{BUS_NAME} is already owned ({reply:?})").into());
+    }
 
     let notify = {
         let mgr = manager.lock().await;

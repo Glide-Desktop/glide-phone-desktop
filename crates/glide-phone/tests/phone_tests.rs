@@ -1518,3 +1518,18 @@ fn a_paired_phone_is_greeted_by_every_plugin() {
         assert!(types.iter().any(|t| t == expected), "{expected} missing from {types:?}");
     }
 }
+
+#[tokio::test]
+async fn a_second_daemon_cannot_take_the_bus_name_and_learns_it_at_once() {
+    use glide_phone::daemon::start_dbus_service_on;
+    let Some(bus) = glide_app::test_bus::private_bus() else { return };
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let manager =
+        std::sync::Arc::new(tokio::sync::Mutex::new(PhoneManager::new(local_config(&cert, Vec::new()), cert)));
+    let builder = || zbus::connection::Builder::address(bus.address.as_str()).unwrap();
+    let _first = start_dbus_service_on(builder(), manager.clone()).await.expect("the first daemon gets the name");
+    let second = tokio::time::timeout(std::time::Duration::from_secs(5), start_dbus_service_on(builder(), manager))
+        .await
+        .expect("answered promptly, not queued");
+    assert!(second.is_err(), "the second daemon must fail so main() exits");
+}
