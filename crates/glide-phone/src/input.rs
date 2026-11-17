@@ -151,13 +151,14 @@ impl Device {
 
 /// The virtual devices, created on first use and fed from one thread.
 pub struct RemoteInput {
-    queue: Option<mpsc::Sender<Vec<Action>>>,
+    queue: Option<mpsc::SyncSender<Vec<Action>>>,
 }
 
 impl RemoteInput {
     #[must_use]
     pub fn start() -> Self {
-        let (sender, receiver) = mpsc::channel::<Vec<Action>>();
+        // Bounded: a flood from the phone is dropped instead of replaying for minutes.
+        let (sender, receiver) = mpsc::sync_channel::<Vec<Action>>(256);
         let spawned = std::thread::Builder::new().name("glide-phone-input".into()).spawn(move || {
             let mut device = None;
             while let Ok(actions) = receiver.recv() {
@@ -191,7 +192,7 @@ impl RemoteInput {
 
     /// A handle to queue actions from another task.
     #[must_use]
-    pub fn clone_queue(&self) -> Option<mpsc::Sender<Vec<Action>>> {
+    pub fn clone_queue(&self) -> Option<mpsc::SyncSender<Vec<Action>>> {
         self.queue.clone()
     }
 
@@ -199,7 +200,7 @@ impl RemoteInput {
         if let Some(queue) = &self.queue
             && !actions.is_empty()
         {
-            let _ = queue.send(actions);
+            let _ = queue.try_send(actions);
         }
     }
 }

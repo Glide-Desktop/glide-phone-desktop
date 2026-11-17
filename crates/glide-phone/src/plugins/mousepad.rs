@@ -150,16 +150,18 @@ pub fn keyboard_state_packet(available: bool) -> NetworkPacket {
     NetworkPacket::new(PACKET_TYPE_MOUSEPAD_KEYBOARDSTATE, json!({ "state": available }))
 }
 
+const MAX_TYPED_BYTES: usize = 4096;
+
 /// Types text in order on one thread: the Wayland virtual keyboard (layout independent),
 /// else US key codes for ASCII, else one paste at a time.
 pub struct Typist {
-    queue: Option<std::sync::mpsc::Sender<String>>,
+    queue: Option<std::sync::mpsc::SyncSender<String>>,
 }
 
 impl Typist {
     #[must_use]
-    pub fn start(input: Option<std::sync::mpsc::Sender<Vec<Action>>>) -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    pub fn start(input: Option<std::sync::mpsc::SyncSender<Vec<Action>>>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(256);
         let spawned = std::thread::Builder::new().name("glide-phone-typist".into()).spawn(move || {
             let mut keyboard: Option<crate::vkbd::VirtualKeyboard> = None;
             let mut tried = false;
@@ -192,14 +194,22 @@ impl Typist {
         Self { queue: spawned.ok().map(|_| sender) }
     }
 
-    pub fn type_text(&self, text: String) {
+    /// Queues text (at most 4 KiB a packet); while the queue is full, more is dropped.
+    pub fn type_text(&self, mut text: String) {
+        if text.len() > MAX_TYPED_BYTES {
+            let mut end = MAX_TYPED_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
         if let Some(queue) = &self.queue {
-            let _ = queue.send(text);
+            let _ = queue.try_send(text);
         }
     }
 }
 
-fn fallback(text: &str, input: Option<&std::sync::mpsc::Sender<Vec<Action>>>) {
+fn fallback(text: &str, input: Option<&std::sync::mpsc::SyncSender<Vec<Action>>>) {
     let Some(input) = input else { return };
     let ascii: Option<Vec<Action>> = text
         .chars()

@@ -51,13 +51,13 @@ enum Command {
 
 /// Owns the tablets on a thread of its own (writes to /dev/uinput block).
 pub struct Digitizer {
-    queue: Option<mpsc::Sender<Command>>,
+    queue: Option<mpsc::SyncSender<Command>>,
 }
 
 impl Digitizer {
     #[must_use]
     pub fn start() -> Self {
-        let (sender, receiver) = mpsc::channel::<Command>();
+        let (sender, receiver) = mpsc::sync_channel::<Command>(512);
         let spawned = std::thread::Builder::new().name("glide-phone-tablet".into()).spawn(move || {
             let mut tablet: Option<Tablet> = None;
             while let Ok(command) = receiver.recv() {
@@ -85,13 +85,13 @@ impl Digitizer {
 
     pub fn session(&self, session: Session) {
         if let Some(queue) = &self.queue {
-            let _ = queue.send(Command::Session(session));
+            let _ = queue.try_send(Command::Session(session)); // never block the runtime thread
         }
     }
 
     pub fn pen(&self, event: PenEvent) {
         if let Some(queue) = &self.queue {
-            let _ = queue.send(Command::Pen(event));
+            let _ = queue.try_send(Command::Pen(event));
         }
     }
 }
