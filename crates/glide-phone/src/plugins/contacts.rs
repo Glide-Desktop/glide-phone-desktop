@@ -48,54 +48,55 @@ fn save_index(dir: &std::path::Path, index: &HashMap<String, i64>) {
     }
 }
 
+/// At most this many contacts per phone; anything beyond is ignored.
+pub const MAX_CONTACTS: usize = 20_000;
+const MAX_VCARD_BYTES: usize = 256 * 1024;
+
 /// The phone listed its contacts: drop the ones it no longer has, and return the request
 /// for the new or changed ones (None when everything is current).
 pub fn on_uids(dir: &std::path::Path, body: &Json) -> Option<NetworkPacket> {
-    let uids: Vec<String> = body.get("uids")?.as_array()?.iter().filter_map(Json::as_str).map(str::to_string).collect();
+    let uids: Vec<String> =
+        body.get("uids")?.as_array()?.iter().filter_map(Json::as_str).take(MAX_CONTACTS).map(str::to_string).collect();
+    let listed: std::collections::HashSet<&str> = uids.iter().map(String::as_str).collect();
     std::fs::create_dir_all(dir).ok()?;
     let mut index = load_index(dir);
+    let stamp = |uid: &str| body.get(uid).and_then(Json::as_i64).unwrap_or(0);
     let wanted: Vec<String> = uids
         .iter()
-        .filter(|uid| {
-            let stamp = body.get(uid.as_str()).and_then(Json::as_i64).unwrap_or(0);
-            index.get(uid.as_str()) != Some(&stamp) || !dir.join(format!("{}.vcf", safe(uid))).is_file()
-        })
+        .filter(|uid| index.get(uid.as_str()) != Some(&stamp(uid)) || !dir.join(format!("{}.vcf", safe(uid))).is_file())
         .cloned()
         .collect();
-    let gone: Vec<String> = index.keys().filter(|uid| !uids.contains(uid)).cloned().collect();
-    for uid in gone {
-        let _ = std::fs::remove_file(dir.join(format!("{}.vcf", safe(&uid))));
-        index.remove(&uid);
-    }
-    for uid in &uids {
-        if !wanted.contains(uid)
-            && let Some(stamp) = body.get(uid.as_str()).and_then(Json::as_i64)
-        {
-            index.insert(uid.clone(), stamp);
+    index.retain(|uid, _| {
+        let keep = listed.contains(uid.as_str());
+        if !keep {
+            let _ = std::fs::remove_file(dir.join(format!("{}.vcf", safe(uid))));
         }
-    }
-    // Remember the timestamps we are about to fetch so a later list doesn't fetch twice.
-    for uid in &wanted {
-        index.insert(uid.clone(), body.get(uid.as_str()).and_then(Json::as_i64).unwrap_or(0));
+        keep
+    });
+    // Remember every listed timestamp (also the ones about to be fetched, so a later list
+    // doesn't fetch them twice); only uids in the index may be stored by on_vcards.
+    for uid in &uids {
+        index.insert(uid.clone(), stamp(uid));
     }
     save_index(dir, &index);
     (!wanted.is_empty()).then(|| NetworkPacket::new(PACKET_TYPE_REQUEST_VCARDS, json!({ "uids": wanted })))
 }
 
-/// The phone sent vCards: store each one.
+/// The phone sent vCards: store the ones it listed (never unrequested extras).
 pub fn on_vcards(dir: &std::path::Path, body: &Json) -> usize {
     let Some(uids) = body.get("uids").and_then(Json::as_array) else { return 0 };
-    if std::fs::create_dir_all(dir).is_err() {
-        return 0;
-    }
+    let index = load_index(dir);
     let mut stored = 0;
-    for uid in uids.iter().filter_map(Json::as_str) {
+    for uid in uids.iter().filter_map(Json::as_str).filter(|uid| index.contains_key(*uid)) {
         if let Some(vcard) = body.get(uid).and_then(Json::as_str)
-            && vcard.len() <= 1024 * 1024
+            && vcard.len() <= MAX_VCARD_BYTES
             && glide_config::write_atomic(&dir.join(format!("{}.vcf", safe(uid))), vcard.as_bytes(), 0o600).is_ok()
         {
             stored += 1;
         }
+    }
+    if stored > 0 {
+        save_index(dir, &index); // marks the book as changed for the names cache
     }
     stored
 }
@@ -107,9 +108,28 @@ pub fn number_key(number: &str) -> String {
     digits.chars().rev().take(9).collect::<Vec<_>>().into_iter().rev().collect()
 }
 
-/// Name for each phone number in a phone's address book.
+/// Name for each phone number in a phone's address book (cached until the book changes).
 #[must_use]
 pub fn names(dir: &std::path::Path) -> HashMap<String, String> {
+    use std::sync::{Mutex, OnceLock};
+    type Cache = HashMap<PathBuf, (Option<std::time::SystemTime>, HashMap<String, String>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let changed = std::fs::metadata(index_path(dir)).and_then(|m| m.modified()).ok();
+    let cache = CACHE.get_or_init(Mutex::default);
+    if let Ok(guard) = cache.lock()
+        && let Some((stamp, names)) = guard.get(dir)
+        && *stamp == changed
+    {
+        return names.clone();
+    }
+    let fresh = read_names(dir);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(dir.to_path_buf(), (changed, fresh.clone()));
+    }
+    fresh
+}
+
+fn read_names(dir: &std::path::Path) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return out };
     for entry in entries.flatten() {
@@ -156,6 +176,9 @@ mod tests {
         );
         assert_eq!(names(&dir).get(&number_key("0501234567")).map(String::as_str), Some("Мама"));
         // a changed, b deleted on the phone.
+        // Unrequested vCards are not stored.
+        on_vcards(&dir, &json!({"uids": ["zzz"], "zzz": "BEGIN:VCARD\nFN:X\nEND:VCARD"}));
+        assert!(!dir.join("zzz.vcf").exists());
         let second = on_uids(&dir, &json!({"uids": ["a"], "a": 5})).expect("fetch a again");
         assert_eq!(second.body["uids"], json!(["a"]));
         assert!(!dir.join("b.vcf").exists());

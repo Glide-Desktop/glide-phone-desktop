@@ -703,6 +703,30 @@ impl PhoneManager {
         }
     }
 
+    /// Contacts sync; file work runs off the runtime and outside the manager lock.
+    fn handle_contacts(&mut self, device_id: &str, packet: &NetworkPacket) {
+        use crate::plugins::contacts;
+        let dir = contacts::book_dir(device_id);
+        let body = packet.body.clone();
+        let is_list = packet.packet_type == contacts::PACKET_TYPE_RESPONSE_UIDS;
+        let sender = self.senders.get(device_id).cloned();
+        let notify = self.notify.clone();
+        let work = move || {
+            if is_list {
+                if let (Some(request), Some(sender)) = (contacts::on_uids(&dir, &body), sender) {
+                    let _ = sender.send(request);
+                }
+            } else if contacts::on_vcards(&dir, &body) > 0 {
+                notify.notify_waiters();
+            }
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::spawn_blocking(work);
+        } else {
+            work();
+        }
+    }
+
     fn handle_feature_packet(
         &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
     ) -> bool {
@@ -715,16 +739,9 @@ impl PhoneManager {
                 self.handle_sms(device_id, packet);
                 true
             }
-            crate::plugins::contacts::PACKET_TYPE_RESPONSE_UIDS => {
-                let dir = crate::plugins::contacts::book_dir(device_id);
-                if let Some(request) = crate::plugins::contacts::on_uids(&dir, &packet.body) {
-                    self.send_to_device(device_id, request);
-                }
-                true
-            }
-            crate::plugins::contacts::PACKET_TYPE_RESPONSE_VCARDS => {
-                crate::plugins::contacts::on_vcards(&crate::plugins::contacts::book_dir(device_id), &packet.body);
-                self.notify.notify_waiters();
+            crate::plugins::contacts::PACKET_TYPE_RESPONSE_UIDS
+            | crate::plugins::contacts::PACKET_TYPE_RESPONSE_VCARDS => {
+                self.handle_contacts(device_id, packet);
                 true
             }
             crate::plugins::connectivity::PACKET_TYPE_CONNECTIVITY_REPORT => {
