@@ -157,8 +157,14 @@ pub async fn start_dbus_service(
 
     let conn_clone = conn.clone();
     tokio::spawn(async move {
+        // Register for the next change before emitting, so a change that happens while the
+        // signal is going out (a battery update right after a connect) isn't lost.
+        let mut changed = Box::pin(notify.notified());
+        changed.as_mut().enable();
         loop {
-            notify.notified().await;
+            changed.as_mut().await;
+            changed = Box::pin(notify.notified());
+            changed.as_mut().enable();
             let _ = conn_clone.emit_signal(None::<()>, OBJECT_PATH, BUS_NAME, "StateChanged", &()).await;
         }
     });
