@@ -76,6 +76,8 @@ pub struct PhoneManager {
     mousepad: crate::plugins::mousepad::Mousepad,
     typist: Option<crate::plugins::mousepad::Typist>,
     digitizer: Option<crate::plugins::digitizer::Digitizer>,
+    /// When we asked each phone for its files; its login is only used shortly after.
+    browse_requested: HashMap<String, Instant>,
     /// Where each phone was last connected from (for unicast rediscovery).
     last_addresses: HashMap<String, std::net::IpAddr>,
     /// The phones' text messages, by device.
@@ -131,6 +133,7 @@ impl PhoneManager {
             phone_media: HashMap::new(),
             sms: HashMap::new(),
             last_addresses: HashMap::new(),
+            browse_requested: HashMap::new(),
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
@@ -364,8 +367,9 @@ impl PhoneManager {
     }
 
     /// Asks the phone for its files (they open once it answers).
-    pub fn browse_phone(&self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn browse_phone(&mut self, device_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.reachable(device_id)?;
+        self.browse_requested.insert(device_id.to_string(), Instant::now());
         self.send_to_device(device_id, crate::plugins::sftp::start_browsing_packet());
         Ok(())
     }
@@ -730,7 +734,17 @@ impl PhoneManager {
             }
             crate::plugins::sftp::PACKET_TYPE_SFTP => {
                 match crate::plugins::sftp::parse(&packet.body) {
-                    crate::plugins::sftp::Reply::Login(login) if tokio::runtime::Handle::try_current().is_ok() => {
+                    // Only the answer to our own request, from where the phone is.
+                    crate::plugins::sftp::Reply::Login(login)
+                        if tokio::runtime::Handle::try_current().is_ok()
+                            && self
+                                .browse_requested
+                                .remove(device_id)
+                                .is_some_and(|asked| asked.elapsed() < Duration::from_mins(1))
+                            && self.last_addresses.get(device_id).is_none_or(|ip| {
+                                login.ip.parse::<std::net::IpAddr>().is_ok_and(|given| given == *ip)
+                            }) =>
+                    {
                         let (id, name) = (device_id.to_string(), device_name.to_string());
                         tokio::spawn(async move { crate::plugins::sftp::browse(&id, &name, login).await });
                     }

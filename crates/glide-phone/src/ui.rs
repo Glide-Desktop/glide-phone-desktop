@@ -616,7 +616,7 @@ impl App for PhoneApp {
                 let asked = if let Some(proxy) = get_proxy() {
                     proxy.browse_phone(&id).unwrap_or(false)
                 } else {
-                    global_manager().and_then(|m| m.try_lock().ok()).is_some_and(|g| g.browse_phone(&id).is_ok())
+                    global_manager().and_then(|m| m.try_lock().ok()).is_some_and(|mut g| g.browse_phone(&id).is_ok())
                 };
                 if !asked {
                     shell.toast(shell.t("Телефон недоступний", "The phone is not reachable"));

@@ -69,6 +69,20 @@ pub fn parse(body: &Json) -> Reply {
     Reply::Login(Login { ip, port, user, password, path: text("path").unwrap_or_else(|| "/".into()), storages })
 }
 
+/// The phone's path as plain relative components; None if it climbs out (`..`) or is odd.
+#[must_use]
+pub fn safe_relative(path: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => out.push(part),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 /// `$XDG_RUNTIME_DIR/glide-phone/<device>`, where the phone is mounted.
 #[must_use]
 pub fn mount_point(device_id: &str) -> PathBuf {
@@ -87,16 +101,24 @@ fn is_mounted(point: &std::path::Path) -> bool {
 /// Mounts the phone (`sshfs`) and opens its first storage; falls back to an `sftp://` URL.
 pub async fn browse(device_id: &str, device_name: &str, login: Login) {
     let point = mount_point(device_id);
-    let open_path = |base: &std::path::Path| base.join(login.path.trim_start_matches('/'));
+    // Only plain components of the phone's path: it must never lead outside the mount.
+    let Some(relative) = safe_relative(&login.path) else {
+        tracing::warn!("refusing an SFTP path that leaves the phone's files");
+        return;
+    };
+    let open_path = |base: &std::path::Path| base.join(&relative);
     if is_mounted(&point) {
         let _ = tokio::process::Command::new("fusermount3").arg("-u").arg(&point).status().await;
     }
     if std::fs::create_dir_all(&point).is_ok() && mount(&point, &login).await {
-        let _ = glide_sdk::system::open(&open_path(&point).to_string_lossy(), "glide-phone");
+        let target = open_path(&point);
+        // Open a folder only, never a file the phone serves (it could be a script).
+        let target = if target.is_dir() { target } else { point.clone() };
+        let _ = glide_sdk::system::open(&target.to_string_lossy(), "glide-phone");
         return;
     }
     // No sshfs: a file manager that speaks SFTP can still open it; it asks for the password.
-    let url = format!("sftp://{}@{}:{}{}", login.user, login.ip, login.port, login.path);
+    let url = format!("sftp://{}@{}:{}/{}", login.user, login.ip, login.port, relative.display());
     if glide_sdk::system::open(&url, "glide-phone").is_err() {
         crate::plugins::announce(
             glide_sdk::system::Notification::new(
@@ -120,7 +142,12 @@ async fn mount(point: &std::path::Path, login: &Login) -> bool {
             "-o",
             "password_stdin,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null,PreferredAuthentications=password",
             "-o",
-            "reconnect,ServerAliveInterval=30,uid_from_server=0",
+            &format!(
+                "reconnect,ServerAliveInterval=30,uid={},gid={}",
+                // SAFETY: getuid/getgid cannot fail.
+                unsafe { libc::getuid() },
+                unsafe { libc::getgid() }
+            ),
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -156,5 +183,8 @@ mod tests {
         assert_eq!(parse(&json!({"serverRunning": false})), Reply::Nothing);
         let evil = json!({"ip": "1.2.3.4;rm -rf ~", "port": 22, "user": "u", "password": "p"});
         assert_eq!(parse(&evil), Reply::Nothing);
+        assert_eq!(safe_relative("/storage/emulated/0"), Some(PathBuf::from("storage/emulated/0")));
+        assert_eq!(safe_relative("/"), Some(PathBuf::new()));
+        assert_eq!(safe_relative("/storage/../../../etc"), None);
     }
 }
