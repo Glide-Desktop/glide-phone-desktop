@@ -191,6 +191,7 @@ impl PhoneManager {
             for packet in self.greeting() {
                 let _ = sender.send(packet);
             }
+            Self::greet_async(sender.clone());
         }
         self.senders.insert(device_id, sender);
         self.notify.notify_waiters();
@@ -226,6 +227,31 @@ impl PhoneManager {
     pub fn greet(&self, device_id: &str) {
         for packet in self.greeting() {
             self.send_to_device(device_id, packet);
+        }
+        if let Some(sender) = self.senders.get(device_id) {
+            Self::greet_async(sender.clone());
+        }
+    }
+
+    /// The part of the greeting that needs the session bus (the player list).
+    fn greet_async(sender: PacketSender) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        tokio::spawn(async move {
+            if let Some(conn) = crate::plugins::mpris::session().await {
+                let names = crate::plugins::mpris::refresh(&conn).await;
+                let _ = sender.send(crate::plugins::mpris::list_packet(&names));
+            }
+        });
+    }
+
+    /// Sends `packet` to every connected, paired phone.
+    pub fn broadcast(&self, packet: &NetworkPacket) {
+        for (id, sender) in &self.senders {
+            if self.is_paired(id) {
+                let _ = sender.send(packet.clone());
+            }
         }
     }
 
@@ -455,6 +481,24 @@ impl PhoneManager {
                     }
                     self.presenter_events.push_back((device_id.to_string(), event));
                     self.notify.notify_waiters();
+                }
+                true
+            }
+            crate::plugins::mpris::PACKET_TYPE_MPRIS_REQUEST => {
+                if let Some(sender) = self.senders.get(device_id).cloned()
+                    && tokio::runtime::Handle::try_current().is_ok()
+                {
+                    let sink = crate::plugins::mpris::Sink {
+                        sender,
+                        cert: self.cert.clone(),
+                        fingerprint: self.devices.get(device_id).and_then(|d| d.peer_fingerprint.clone()),
+                    };
+                    let body = packet.body.clone();
+                    tokio::spawn(async move {
+                        if let Some(conn) = crate::plugins::mpris::session().await {
+                            crate::plugins::mpris::handle_request(&conn, &body, &sink).await;
+                        }
+                    });
                 }
                 true
             }

@@ -71,14 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let service = Arc::new(service);
 
     set_global_manager(service.manager());
-    {
-        let manager = service.manager();
-        let _guard = rt.enter();
-        glide_phone::plugins::clipboard::watch(move |text| {
-            let manager = manager.clone();
-            tokio::spawn(async move { manager.lock().await.local_clipboard_changed(text) });
-        });
-    }
+    start_watchers(&rt, &service.manager());
 
     // Autostart and D-Bus activation can start two daemons at once: only the one that gets
     // the bus name may run. Exit right away otherwise; returning would wait for the runtime
@@ -138,4 +131,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let _ = glide_sdk::run::<PhoneApp>(settings);
     Ok(())
+}
+
+/// Follows this computer's state that phones mirror: media players and the clipboard.
+fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex<glide_phone::PhoneManager>>) {
+    let manager = manager.clone();
+    let _guard = rt.enter();
+    let players_manager = manager.clone();
+    rt.spawn(async move {
+        if let Some(conn) = glide_phone::plugins::mpris::session().await {
+            glide_phone::plugins::mpris::watch(conn, move |packet| {
+                let manager = players_manager.clone();
+                tokio::spawn(async move { manager.lock().await.broadcast(&packet) });
+            })
+            .await;
+        }
+    });
+    glide_phone::plugins::clipboard::watch(move |text| {
+        let manager = manager.clone();
+        tokio::spawn(async move { manager.lock().await.local_clipboard_changed(text) });
+    });
 }

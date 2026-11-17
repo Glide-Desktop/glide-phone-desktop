@@ -1261,3 +1261,133 @@ fn the_computers_clipboard_follows_to_paired_phones_and_newer_wins_on_connect() 
     manager.handle_packet("pinned", &stale).expect("handled");
     assert_eq!(manager.clipboard_text().as_deref(), Some("скопійовано"));
 }
+
+#[allow(clippy::unused_self, clippy::needless_pass_by_value)] // zbus interface signatures
+mod fake_player {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+
+    pub struct Root;
+    #[zbus::interface(name = "org.mpris.MediaPlayer2")]
+    impl Root {
+        #[zbus(property)]
+        fn identity(&self) -> String {
+            "Плеєр".into()
+        }
+    }
+
+    pub struct Player {
+        pub calls: Arc<Mutex<Vec<String>>>,
+        pub volume: Arc<Mutex<f64>>,
+    }
+    #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+    impl Player {
+        fn play_pause(&self) {
+            self.calls.lock().unwrap().push("PlayPause".into());
+        }
+        fn next(&self) {
+            self.calls.lock().unwrap().push("Next".into());
+        }
+        fn set_position(&self, track: ObjectPath<'_>, position: i64) {
+            self.calls.lock().unwrap().push(format!("SetPosition {track} {position}"));
+        }
+        #[zbus(property)]
+        fn metadata(&self) -> HashMap<String, OwnedValue> {
+            let mut map = HashMap::new();
+            map.insert("xesam:title".into(), OwnedValue::try_from(Value::from("Пісня")).unwrap());
+            map.insert("xesam:artist".into(), OwnedValue::try_from(Value::from(vec!["Гурт"])).unwrap());
+            map.insert("mpris:length".into(), OwnedValue::from(240_000_000i64));
+            map.insert(
+                "mpris:trackid".into(),
+                OwnedValue::try_from(Value::from(ObjectPath::try_from("/track/1").unwrap())).unwrap(),
+            );
+            map
+        }
+        #[zbus(property)]
+        fn playback_status(&self) -> String {
+            "Playing".into()
+        }
+        #[zbus(property)]
+        fn position(&self) -> i64 {
+            30_000_000
+        }
+        #[zbus(property)]
+        fn can_play(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_pause(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_go_next(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn can_go_previous(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        fn can_seek(&self) -> bool {
+            true
+        }
+        #[zbus(property)]
+        fn volume(&self) -> f64 {
+            *self.volume.lock().unwrap()
+        }
+        #[zbus(property)]
+        fn set_volume(&self, value: f64) {
+            *self.volume.lock().unwrap() = value;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_phone_sees_and_controls_this_computers_media_players() {
+    use glide_phone::plugins::mpris::{Sink, handle_request, list_packet, refresh, state_packet};
+    let Some(bus) = glide_app::test_bus::private_bus() else { return };
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let volume = std::sync::Arc::new(std::sync::Mutex::new(0.5));
+    let _player = zbus::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name("org.mpris.MediaPlayer2.fake")
+        .unwrap()
+        .serve_at("/org/mpris/MediaPlayer2", fake_player::Root)
+        .unwrap()
+        .serve_at("/org/mpris/MediaPlayer2", fake_player::Player { calls: calls.clone(), volume: volume.clone() })
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let conn = zbus::connection::Builder::address(bus.address.as_str()).unwrap().build().await.unwrap();
+
+    let names = refresh(&conn).await;
+    assert_eq!(names, ["Плеєр"]);
+    assert_eq!(list_packet(&names).body["playerList"][0], "Плеєр");
+
+    let state = state_packet(&conn, "Плеєр").await.expect("state").body;
+    assert_eq!(state["title"], "Пісня");
+    assert_eq!(state["artist"], "Гурт");
+    assert_eq!(state["length"], 240_000);
+    assert_eq!(state["pos"], 30_000);
+    assert_eq!(state["isPlaying"], true);
+    assert_eq!(state["canGoPrevious"], false);
+    assert_eq!(state["volume"], 50);
+
+    let cert = IdentityCert::generate("desktop_123456789012345678901234567").unwrap();
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Sink { sender, cert, fingerprint: None };
+    handle_request(&conn, &json!({"player": "Плеєр", "action": "PlayPause"}), &sink).await;
+    handle_request(&conn, &json!({"player": "Плеєр", "setVolume": 80}), &sink).await;
+    handle_request(&conn, &json!({"player": "Плеєр", "SetPosition": 1500}), &sink).await;
+    assert_eq!(*calls.lock().unwrap(), ["PlayPause", "SetPosition /track/1 1500000"]);
+    assert!((*volume.lock().unwrap() - 0.8).abs() < 1e-9);
+    assert_eq!(sent.try_recv().expect("state after the action").body["player"], "Плеєр");
+    handle_request(&conn, &json!({"requestPlayerList": true}), &sink).await;
+    let mut got_list = false;
+    while let Ok(packet) = sent.try_recv() {
+        got_list |= packet.body.get("playerList").is_some();
+    }
+    assert!(got_list);
+}
