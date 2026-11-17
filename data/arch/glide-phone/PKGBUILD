@@ -1,0 +1,48 @@
+pkgname=glide-phone
+pkgver=0.1.r0.g0000000
+pkgrel=1
+pkgdesc="Glide Phone Link: KDE Connect compatible daemon and window"
+arch=(x86_64)
+url="https://github.com/Glide-Desktop/glide-phone-desktop"
+license=(GPL-3.0-or-later)
+depends=(
+    glibc gcc-libs libglvnd vulkan-icd-loader wayland libxkbcommon hicolor-icon-theme
+    glide-configd dbus xdg-utils wl-clipboard pipewire-audio sound-theme-freedesktop
+)
+makedepends=(git cargo pkgconf)
+options=(!lto !debug)
+_git="${GLIDE_GIT:-https://github.com/Glide-Desktop}"
+_target="${GLIDE_CARGO_TARGET:-target}"
+source=("$pkgname::git+$_git/glide-phone-desktop.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$pkgname"
+    printf '0.1.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd "$pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname"
+    export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR="$_target"
+    cargo build --frozen --release -p glide-phone
+}
+
+package() {
+    cd "$pkgname"
+    install -Dm755 $_target/release/glide-phone "$pkgdir/usr/bin/glide-phone"
+    install -Dm644 data/glide-phone.desktop "$pkgdir/usr/share/applications/glide-phone.desktop"
+    install -Dm644 data/glide-phone-autostart.desktop "$pkgdir/etc/xdg/autostart/glide-phone.desktop"
+    install -Dm644 data/glide-phone.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/glide-phone.svg"
+    install -Dm644 data/glide-phone.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.kde.kdeconnect.svg"
+    install -d "$pkgdir/usr/share/dbus-1/services"
+    sed 's|^Exec=[^ ]*/glide-phone|Exec=/usr/bin/glide-phone|' data/org.glide.Phone.service \
+        > "$pkgdir/usr/share/dbus-1/services/org.glide.Phone.service"
+    chmod 644 "$pkgdir/usr/share/dbus-1/services/org.glide.Phone.service"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
