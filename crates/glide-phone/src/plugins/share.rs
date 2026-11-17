@@ -55,6 +55,21 @@ fn announce(key: crate::i18n::Key, device: &str, body: String, icon: &'static st
     crate::plugins::announce(glide_sdk::system::Notification::new("glide-phone", summary).body(body).icon(icon));
 }
 
+/// The notification after a batch from this computer finished.
+pub(crate) fn announce_sent(device: &str, count: usize, failed: usize) {
+    let body = if failed == 0 {
+        crate::i18n::count(crate::i18n::Key::FilesSent, count)
+    } else {
+        crate::i18n::count(crate::i18n::Key::FilesFailed, failed)
+    };
+    announce(
+        crate::i18n::Key::SentTo,
+        device,
+        body,
+        if failed == 0 { "document-send-symbolic" } else { "dialog-error-symbolic" },
+    );
+}
+
 pub(crate) async fn copy_text(text: &str) -> bool {
     use tokio::io::AsyncWriteExt as _;
     let spawned = tokio::process::Command::new("wl-copy")

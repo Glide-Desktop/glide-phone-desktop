@@ -22,7 +22,7 @@ rustls-pki-types = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process", "signal", "fs"] }
 tokio-rustls = "0.26"
 tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true

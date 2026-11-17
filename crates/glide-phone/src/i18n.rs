@@ -16,6 +16,9 @@ glide_sdk::catalogue! {
     TextFrom => "Text from {device}", "Текст від {device}";
     Reply => "Reply", "Відповісти";
     ReplyHint => "Type a reply…", "Введіть відповідь…";
+    SentTo => "Sent to {device}", "Надіслано на {device}";
+    FilesSent => "Files sent: {count}", "Надіслано файлів: {count}";
+    FilesFailed => "Could not send {count} of the files", "Не вдалося надіслати файлів: {count}";
 }
 
 #[must_use]
@@ -32,6 +35,11 @@ pub fn t(key: Key) -> &'static str {
 #[must_use]
 pub fn naming(key: Key, device: &str) -> String {
     t(key).replace("{device}", device)
+}
+
+#[must_use]
+pub fn count(key: Key, count: usize) -> String {
+    t(key).replace("{count}", &count.to_string())
 }
 
 #[cfg(test)]

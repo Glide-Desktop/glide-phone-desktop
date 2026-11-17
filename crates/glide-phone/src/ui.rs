@@ -69,6 +69,8 @@ pub enum Message {
     StopAlarm,
     DismissNotification(String, String),
     ClearNotifications(String),
+    SendFiles(String),
+    FilesChosen(String, Vec<std::path::PathBuf>),
     Refresh,
     Loaded(Option<Snapshot>),
 }
@@ -113,6 +115,46 @@ impl PhoneApp {
         } else {
             shell.toast(shell.t("Запит на з'єднання надіслано", "Pairing request sent"));
         }
+    }
+
+    fn choose_files(id: String, shell: &Shell<Message>) -> Task<Message> {
+        let ask = glide_sdk::chooser::Ask {
+            purpose: glide_sdk::chooser::Purpose::Open,
+            title: shell.t("Надіслати на телефон", "Send to phone").into(),
+            accept: shell.t("Надіслати", "Send").into(),
+            name: None,
+            folder: None,
+        };
+        let chosen = glide_sdk::chooser::spawn(ask);
+        Task::perform(
+            async move {
+                match chosen.await {
+                    Ok(glide_sdk::chooser::Chosen::Paths(paths)) => paths,
+                    _ => Vec::new(),
+                }
+            },
+            move |paths| Message::FilesChosen(id, paths),
+        )
+    }
+
+    fn send_files(id: &str, paths: Vec<std::path::PathBuf>, shell: &mut Shell<Message>) {
+        if paths.is_empty() {
+            return;
+        }
+        let as_strings: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let started = if let Some(proxy) = get_proxy() {
+            proxy.share_files(id, as_strings).unwrap_or(false)
+        } else if let Some(m) = global_manager() {
+            m.try_lock().is_ok_and(|guard| guard.share_files(id, paths).is_ok())
+        } else {
+            false
+        };
+        let text = if started {
+            shell.t("Надсилання розпочато", "Sending…")
+        } else {
+            shell.t("Телефон недоступний", "The phone is not reachable")
+        };
+        shell.toast(text);
     }
 
     fn view_alarm_banner(shell: &Shell<Message>) -> Element<'_, Message> {
@@ -199,6 +241,14 @@ impl PhoneApp {
         let mut actions = row![].spacing(SP2).align_y(Alignment::Center);
 
         if dev.connected {
+            actions = actions.push(widget::glyph_button(
+                paint,
+                Icon::File,
+                shell.t("Надіслати файли", "Send files"),
+                Tone::Tonal,
+                Size::Small,
+                Some(Message::SendFiles(dev.id.clone())),
+            ));
             actions = actions.push(widget::glyph_button(
                 paint,
                 Icon::Bell,
@@ -469,6 +519,8 @@ impl App for PhoneApp {
                     }
                 }
             }
+            Message::SendFiles(id) => return Self::choose_files(id, shell),
+            Message::FilesChosen(id, paths) => Self::send_files(&id, paths, shell),
             Message::Refresh => {
                 if !std::mem::replace(&mut self.refreshing, true) {
                     return Task::perform(off_thread(snapshot), Message::Loaded);

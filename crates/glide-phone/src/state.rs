@@ -615,4 +615,45 @@ impl PhoneManager {
         self.send_to_device(device_id, packet.clone());
         Ok(packet)
     }
+
+    /// Sends files one after another as payloads (`SharePlugin`'s batch), returning at once.
+    pub fn share_files(
+        &self, device_id: &str, paths: Vec<std::path::PathBuf>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        let files: Vec<(std::path::PathBuf, u64)> = paths
+            .into_iter()
+            .filter_map(|path| {
+                std::fs::metadata(&path).ok().filter(std::fs::Metadata::is_file).map(|m| (path, m.len()))
+            })
+            .collect();
+        if files.is_empty() {
+            return Err("nothing to send".into());
+        }
+        let sender = self.senders.get(device_id).cloned().ok_or("device is not connected")?;
+        let cert = self.cert.clone();
+        let fingerprint = self.devices.get(device_id).and_then(|d| d.peer_fingerprint.clone());
+        let device_name = self.devices.get(device_id).map(|d| d.name.clone()).unwrap_or_default();
+        let total: u64 = files.iter().map(|(_, size)| size).sum();
+        let count = files.len();
+        tokio::spawn(async move {
+            let mut failed = 0usize;
+            for (path, size) in &files {
+                let sent = async {
+                    let listener = crate::payload::PayloadListener::bind(&cert, fingerprint.clone()).await.ok()?;
+                    let file = tokio::fs::File::open(path).await.ok()?;
+                    let mut packet = crate::payload::share_file_packet(path, count, total);
+                    crate::payload::attach(&mut packet, *size, listener.port());
+                    sender.send(packet).ok()?;
+                    listener.serve(file, *size, crate::payload::ACCEPT_TIMEOUT).await.then_some(())
+                }
+                .await;
+                if sent.is_none() {
+                    failed += 1;
+                }
+            }
+            crate::plugins::share::announce_sent(&device_name, count, failed);
+        });
+        Ok(())
+    }
 }

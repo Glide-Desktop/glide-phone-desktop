@@ -105,6 +105,12 @@ impl PhoneDaemon {
         mgr.share_url(device_id, url).is_ok()
     }
 
+    /// Sends local files to the phone; returns false if it is not reachable.
+    pub async fn share_files(&self, device_id: &str, paths: Vec<String>) -> bool {
+        let mgr = self.manager.lock().await;
+        mgr.share_files(device_id, paths.into_iter().map(std::path::PathBuf::from).collect()).is_ok()
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

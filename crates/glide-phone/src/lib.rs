@@ -5,6 +5,7 @@ pub mod daemon;
 pub mod discovery;
 pub mod i18n;
 pub mod link;
+pub mod payload;
 pub mod plugins;
 pub mod protocol;
 pub mod service;

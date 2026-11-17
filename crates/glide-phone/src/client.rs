@@ -12,6 +12,7 @@ pub trait PhoneDaemon {
     fn clipboard_text(&self) -> zbus::Result<String>;
     fn share_text(&self, device_id: &str, text: &str) -> zbus::Result<bool>;
     fn share_url(&self, device_id: &str, url: &str) -> zbus::Result<bool>;
+    fn share_files(&self, device_id: &str, paths: Vec<String>) -> zbus::Result<bool>;
     fn take_presenter_event(&self) -> zbus::Result<String>;
     fn is_ringing(&self) -> zbus::Result<bool>;
 }

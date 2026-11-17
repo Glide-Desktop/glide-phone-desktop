@@ -1111,3 +1111,70 @@ fn identity_marks_glide_and_kde_peers_apart() {
     let dial = IdentityBody::new_connection_packet("id", "Desk", "peer").expect("dial");
     assert_eq!(dial.body["glideProtocol"], glide_phone::protocol::identity::GLIDE_PROTOCOL);
 }
+
+#[tokio::test]
+async fn a_payload_is_served_only_to_the_pinned_phone() {
+    use glide_phone::crypto::tls::make_client_config;
+    use glide_phone::payload::{MAX_PAYLOAD_PORT, MIN_PAYLOAD_PORT, PayloadListener};
+    use tokio::io::AsyncReadExt as _;
+
+    let desktop = IdentityCert::generate("desktop_123456789012345678901234567").expect("desktop cert");
+    let phone = IdentityCert::generate("phone_1234567890123456789012345678901").expect("phone cert");
+    let stranger = IdentityCert::generate("other_1234567890123456789012345678901").expect("other cert");
+    let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+
+    let fetch = |cert: IdentityCert, port: u16| {
+        let desktop_fp = compute_fingerprint(&desktop.cert_der);
+        async move {
+            let config = make_client_config(&cert, Some(desktop_fp)).ok()?;
+            let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
+            let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+            let name = rustls::pki_types::ServerName::try_from("kdeconnect").ok()?;
+            let mut tls = connector.connect(name, tcp).await.ok()?;
+            let mut out = Vec::new();
+            tls.read_to_end(&mut out).await.ok()?;
+            Some(out)
+        }
+    };
+
+    // The pinned phone gets every byte, and the listener reports success.
+    let listener = PayloadListener::bind(&desktop, Some(compute_fingerprint(&phone.cert_der))).await.expect("bind");
+    let port = listener.port();
+    assert!((MIN_PAYLOAD_PORT..=MAX_PAYLOAD_PORT).contains(&port));
+    let size = bytes.len() as u64;
+    let serving =
+        tokio::spawn(listener.serve(std::io::Cursor::new(bytes.clone()), size, std::time::Duration::from_secs(5)));
+    assert_eq!(fetch(phone, port).await.as_deref(), Some(bytes.as_slice()));
+    assert!(serving.await.expect("join"));
+
+    // Anyone else is refused during the handshake and nothing is sent.
+    let listener = PayloadListener::bind(
+        &desktop,
+        Some(compute_fingerprint(&IdentityCert::generate("x_12345678901234567890123456789012").unwrap().cert_der)),
+    )
+    .await
+    .expect("bind");
+    let port = listener.port();
+    let serving =
+        tokio::spawn(listener.serve(std::io::Cursor::new(vec![1u8; 10]), 10, std::time::Duration::from_secs(5)));
+    assert!(fetch(stranger, port).await.is_none_or(|got| got.is_empty()));
+    assert!(!serving.await.expect("join"));
+}
+
+#[test]
+fn a_shared_file_is_announced_like_kde_connect() {
+    let dir = std::env::temp_dir().join(format!("glide-share-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("фото.jpg");
+    std::fs::write(&path, b"12345").unwrap();
+    let mut packet = glide_phone::payload::share_file_packet(&path, 2, 9);
+    glide_phone::payload::attach(&mut packet, 5, 1740);
+    assert_eq!(packet.packet_type, "kdeconnect.share.request");
+    assert_eq!(packet.body["filename"], "фото.jpg");
+    assert_eq!(packet.body["numberOfFiles"], 2);
+    assert_eq!(packet.body["totalPayloadSize"], 9);
+    assert!(packet.body["lastModified"].as_u64().is_some());
+    assert_eq!(packet.payload_size, Some(5));
+    assert_eq!(packet.payload_transfer_info.as_ref().unwrap()["port"], 1740);
+    std::fs::remove_dir_all(dir).ok();
+}
