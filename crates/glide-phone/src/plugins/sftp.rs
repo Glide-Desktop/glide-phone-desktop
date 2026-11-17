@@ -69,6 +69,11 @@ pub fn parse(body: &Json) -> Reply {
     Reply::Login(Login { ip, port, user, password, path: text("path").unwrap_or_else(|| "/".into()), storages })
 }
 
+/// An address as a host part: IPv6 in brackets.
+fn host(ip: &str) -> String {
+    if ip.contains(':') { format!("[{ip}]") } else { ip.to_string() }
+}
+
 /// The phone's path as plain relative components; None if it climbs out (`..`) or is odd.
 #[must_use]
 pub fn safe_relative(path: &str) -> Option<PathBuf> {
@@ -118,7 +123,7 @@ pub async fn browse(device_id: &str, device_name: &str, login: Login) {
         return;
     }
     // No sshfs: a file manager that speaks SFTP can still open it; it asks for the password.
-    let url = format!("sftp://{}@{}:{}/{}", login.user, login.ip, login.port, relative.display());
+    let url = format!("sftp://{}@{}:{}/{}", login.user, host(&login.ip), login.port, relative.display());
     if glide_sdk::system::open(&url, "glide-phone").is_err() {
         crate::plugins::announce(
             glide_sdk::system::Notification::new(
@@ -133,7 +138,7 @@ pub async fn browse(device_id: &str, device_name: &str, login: Login) {
 
 async fn mount(point: &std::path::Path, login: &Login) -> bool {
     use tokio::io::AsyncWriteExt as _;
-    let target = format!("{}@{}:/", login.user, login.ip);
+    let target = format!("{}@{}:/", login.user, host(&login.ip));
     let child = tokio::process::Command::new("sshfs")
         .arg(&target)
         .arg(point)

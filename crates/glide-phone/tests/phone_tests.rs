@@ -1307,6 +1307,7 @@ mod fake_player {
             map.insert("xesam:title".into(), OwnedValue::try_from(Value::from("Пісня")).unwrap());
             map.insert("xesam:artist".into(), OwnedValue::try_from(Value::from(vec!["Гурт"])).unwrap());
             map.insert("mpris:length".into(), OwnedValue::from(240_000_000i64));
+            map.insert("mpris:artUrl".into(), OwnedValue::try_from(Value::from(super::FAKE_ART_URL)).unwrap());
             map.insert(
                 "mpris:trackid".into(),
                 OwnedValue::try_from(Value::from(ObjectPath::try_from("/track/1").unwrap())).unwrap(),
@@ -1351,6 +1352,8 @@ mod fake_player {
         }
     }
 }
+
+const FAKE_ART_URL: &str = "file:///tmp/glide-phone-test-fake-art.png";
 
 #[tokio::test]
 async fn the_phone_sees_and_controls_this_computers_media_players() {
@@ -1399,6 +1402,27 @@ async fn the_phone_sees_and_controls_this_computers_media_players() {
         got_list |= packet.body.get("playerList").is_some();
     }
     assert!(got_list);
+    // The player's own art goes to the phone as a payload.
+    std::fs::write(FAKE_ART_URL.trim_start_matches("file://"), b"png").unwrap();
+    let serving = tokio::spawn({
+        let (conn, sink) =
+            (conn.clone(), Sink { sender: sink.sender.clone(), cert: sink.cert.clone(), fingerprint: None });
+        async move { handle_request(&conn, &json!({"player": "Плеєр", "albumArtUrl": FAKE_ART_URL}), &sink).await }
+    });
+    let announced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(p) = sent.recv().await
+                && p.body.get("transferringAlbumArt").is_some()
+            {
+                return p;
+            }
+        }
+    })
+    .await
+    .expect("the player's art is offered");
+    assert_eq!(announced.body["albumArtUrl"], FAKE_ART_URL);
+    assert_eq!(announced.payload_size, Some(3));
+    serving.abort();
     // The phone can't make us send a file the player doesn't show as its art.
     handle_request(&conn, &json!({"player": "Плеєр", "albumArtUrl": "file:///etc/hostname"}), &sink).await;
     assert!(

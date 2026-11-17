@@ -229,7 +229,8 @@ impl PhoneManager {
     }
 
     pub fn remember_address(&mut self, device_id: &str, ip: std::net::IpAddr) {
-        self.last_addresses.insert(device_id.to_string(), ip);
+        // ::ffff:a.b.c.d from a dual-stack socket is the plain IPv4 address.
+        self.last_addresses.insert(device_id.to_string(), ip.to_canonical());
     }
 
     /// Last addresses of paired phones that are not connected now.
@@ -753,17 +754,18 @@ impl PhoneManager {
             }
             crate::plugins::sftp::PACKET_TYPE_SFTP => {
                 match crate::plugins::sftp::parse(&packet.body) {
-                    // Only the answer to our own request, from where the phone is.
-                    crate::plugins::sftp::Reply::Login(login)
+                    // Only the answer to our own request; mount where the phone is connected from,
+                    // never a host the packet names (KDE Connect may name another interface).
+                    crate::plugins::sftp::Reply::Login(mut login)
                         if tokio::runtime::Handle::try_current().is_ok()
                             && self
                                 .browse_requested
                                 .remove(device_id)
-                                .is_some_and(|asked| asked.elapsed() < Duration::from_mins(1))
-                            && self.last_addresses.get(device_id).is_none_or(|ip| {
-                                login.ip.parse::<std::net::IpAddr>().is_ok_and(|given| given == *ip)
-                            }) =>
+                                .is_some_and(|asked| asked.elapsed() < Duration::from_mins(1)) =>
                     {
+                        if let Some(ip) = self.last_addresses.get(device_id) {
+                            login.ip = ip.to_string();
+                        }
                         let (id, name) = (device_id.to_string(), device_name.to_string());
                         tokio::spawn(async move { crate::plugins::sftp::browse(&id, &name, login).await });
                     }
