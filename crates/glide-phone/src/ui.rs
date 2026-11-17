@@ -53,6 +53,8 @@ pub struct PhoneCardData {
     pub connected: bool,
     #[serde(default)]
     pub signals: Vec<crate::plugins::connectivity::Signal>,
+    #[serde(default)]
+    pub keyboard_off: bool,
 }
 
 fn short_verification_code(fp: &str) -> String {

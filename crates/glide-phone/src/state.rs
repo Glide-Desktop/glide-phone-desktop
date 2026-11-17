@@ -55,6 +55,8 @@ pub struct PhoneDeviceState {
     pub peer_fingerprint: Option<String>,
     pub connected: bool,
     pub signals: Vec<crate::plugins::connectivity::Signal>,
+    /// The phone said its keyboard can't type right now (`mousepad.keyboardstate`).
+    pub keyboard_off: bool,
 }
 
 pub struct PhoneManager {
@@ -108,6 +110,7 @@ impl PhoneManager {
                     peer_fingerprint: Some(paired.fingerprint.clone()),
                     connected: false,
                     signals: Vec::new(),
+                    keyboard_off: false,
                 },
             );
         }
@@ -178,6 +181,7 @@ impl PhoneManager {
             peer_fingerprint: paired_fp.filter(|s| !s.is_empty()),
             connected: false,
             signals: Vec::new(),
+            keyboard_off: false,
         });
         let changed = entry.name != name
             || entry.device_type != device_type
@@ -644,14 +648,9 @@ impl PhoneManager {
     }
 
     /// Packets of the plugins beyond the original set (run command, media, volume, calls).
-    fn handle_feature_packet(
-        &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
-    ) -> bool {
+    /// Drawing tablet, keyboard state and share batch updates.
+    fn handle_input_packet(&mut self, device_id: &str, packet: &NetworkPacket) -> bool {
         match packet.packet_type.as_str() {
-            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
-                self.handle_phone_media(device_id, packet, payload);
-                true
-            }
             crate::plugins::digitizer::PACKET_TYPE_DIGITIZER_SESSION if self.remote_input => {
                 if let Some(session) = crate::plugins::digitizer::parse_session(&packet.body) {
                     self.digitizer.get_or_insert_with(crate::plugins::digitizer::Digitizer::start).session(session);
@@ -662,6 +661,28 @@ impl PhoneManager {
                 if let Some(digitizer) = &self.digitizer {
                     digitizer.pen(crate::plugins::digitizer::parse_event(&packet.body));
                 }
+                true
+            }
+            crate::plugins::mousepad::PACKET_TYPE_MOUSEPAD_KEYBOARDSTATE => {
+                if let Some(device) = self.devices.get_mut(device_id) {
+                    device.keyboard_off =
+                        !packet.body.get("state").and_then(serde_json::Value::as_bool).unwrap_or(true);
+                    self.notify.notify_waiters();
+                }
+                true
+            }
+            // Later files of a batch only update the totals; each file arrives on its own.
+            "kdeconnect.share.request.update" => true,
+            _ => false,
+        }
+    }
+
+    fn handle_feature_packet(
+        &mut self, device_id: &str, packet: &NetworkPacket, device_name: &str, payload: Option<&[u8]>,
+    ) -> bool {
+        match packet.packet_type.as_str() {
+            crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
+                self.handle_phone_media(device_id, packet, payload);
                 true
             }
             crate::plugins::sms::PACKET_TYPE_SMS_MESSAGES => {
@@ -743,7 +764,7 @@ impl PhoneManager {
                 }
                 true
             }
-            _ => false,
+            _ => self.handle_input_packet(device_id, packet),
         }
     }
 
@@ -938,6 +959,7 @@ impl PhoneManager {
                     peer_fingerprint: s.peer_fingerprint.clone(),
                     connected: s.connected,
                     signals: s.signals.clone(),
+                    keyboard_off: s.keyboard_off,
                 }
             })
             .collect();

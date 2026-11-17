@@ -25,6 +25,7 @@ pub struct Panels {
     pub typed: String,
     pub share_draft: String,
     pub sms: std::collections::HashMap<String, crate::plugins::sms::Inbox>,
+    pub keyboard_off: std::collections::HashMap<String, bool>,
     pub open_thread: Option<i64>,
     pub sms_draft: String,
     pub draft_name: String,
@@ -397,9 +398,15 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
         widget::compact_button(paint, "Ping", Tone::Neutral, Some(Message::Panel(PanelMessage::Ping))),
     ]
     .spacing(8);
+    let keyboard_off = panels.reachable.first().and_then(|id| panels.keyboard_off.get(id)).copied().unwrap_or(false);
+    let description = if keyboard_off {
+        format!("{device} · {}", shell.t("клавіатура телефону зараз недоступна", "the phone's keyboard is unavailable"))
+    } else {
+        device
+    };
     widget::Group::new(paint)
         .title(shell.t("Керувати телефоном", "Control the phone"))
-        .description(device)
+        .description(description)
         .push(column![pad, keys, typing, share].spacing(10))
         .into()
 }

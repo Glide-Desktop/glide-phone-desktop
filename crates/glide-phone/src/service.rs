@@ -123,6 +123,8 @@ impl PhoneService {
                 "kdeconnect.contacts.response_uids_timestamps".to_string(),
                 "kdeconnect.contacts.response_vcards".to_string(),
                 "kdeconnect.sms.messages".to_string(),
+                "kdeconnect.mousepad.keyboardstate".to_string(),
+                "kdeconnect.share.request.update".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
