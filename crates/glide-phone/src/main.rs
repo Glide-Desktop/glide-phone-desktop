@@ -80,7 +80,16 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
 
-    let _dbus_conn = rt.block_on(start_dbus_service(service.manager()))?;
+    // Autostart and D-Bus activation can start two daemons at once: only the one that gets
+    // the bus name may run. Exit right away otherwise; returning would wait for the runtime
+    // and leave a second daemon holding a TCP port without ever being reachable.
+    let _dbus_conn = match rt.block_on(start_dbus_service(service.manager())) {
+        Ok(connection) => connection,
+        Err(err) => {
+            tracing::info!(%err, "another glide-phone daemon owns org.glide.Phone; this one exits");
+            std::process::exit(0);
+        }
+    };
 
     let service_clone = service.clone();
     rt.spawn(async move {
