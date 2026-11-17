@@ -20,6 +20,7 @@ pub const MAX_PAYLOAD_PORT: u16 = 1764;
 /// How long the receiver has to connect once the packet went out.
 pub const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_mins(1);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A listening payload slot; drop it to give the port back.
 pub struct PayloadListener {
@@ -49,13 +50,19 @@ impl PayloadListener {
 
     /// Waits for the receiver and streams `size` bytes of `source`; true when all were sent.
     pub async fn serve(self, mut source: impl AsyncRead + Unpin, size: u64, accept_timeout: Duration) -> bool {
-        let Ok(Ok((stream, _))) = tokio::time::timeout(accept_timeout, self.listener.accept()).await else {
-            return false;
+        // Anyone on the network can connect first; keep accepting until the pinned receiver
+        // completes the TLS handshake, so a stranger can't take the slot.
+        let deadline = tokio::time::Instant::now() + accept_timeout;
+        let mut tls = loop {
+            let Ok(Ok((stream, _))) = tokio::time::timeout_at(deadline, self.listener.accept()).await else {
+                return false;
+            };
+            let handshake = deadline.min(tokio::time::Instant::now() + HANDSHAKE_TIMEOUT);
+            if let Ok(Ok(tls)) = tokio::time::timeout_at(handshake, self.acceptor.accept(stream)).await {
+                break tls;
+            }
         };
         drop(self.listener);
-        let Ok(Ok(mut tls)) = tokio::time::timeout(IDLE_TIMEOUT, self.acceptor.accept(stream)).await else {
-            return false;
-        };
         let mut sent = 0u64;
         let mut chunk = vec![0u8; 64 * 1024];
         while sent < size {
@@ -71,8 +78,8 @@ impl PayloadListener {
             }
             sent += read as u64;
         }
-        let _ = tls.flush().await;
-        let _ = tls.shutdown().await;
+        let _ = tokio::time::timeout(IDLE_TIMEOUT, tls.flush()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), tls.shutdown()).await;
         sent == size
     }
 }

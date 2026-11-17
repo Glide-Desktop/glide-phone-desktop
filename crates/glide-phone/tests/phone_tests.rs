@@ -1144,6 +1144,15 @@ async fn a_payload_is_served_only_to_the_pinned_phone() {
     let size = bytes.len() as u64;
     let serving =
         tokio::spawn(listener.serve(std::io::Cursor::new(bytes.clone()), size, std::time::Duration::from_secs(5)));
+    assert_eq!(fetch(phone.clone(), port).await.as_deref(), Some(bytes.as_slice()));
+    assert!(serving.await.expect("join"));
+
+    // A stranger connecting first doesn't take the slot: the phone still gets the file.
+    let listener = PayloadListener::bind(&desktop, Some(compute_fingerprint(&phone.cert_der))).await.expect("bind");
+    let port = listener.port();
+    let serving =
+        tokio::spawn(listener.serve(std::io::Cursor::new(bytes.clone()), size, std::time::Duration::from_secs(5)));
+    assert!(fetch(stranger.clone(), port).await.is_none_or(|got| got.is_empty()));
     assert_eq!(fetch(phone, port).await.as_deref(), Some(bytes.as_slice()));
     assert!(serving.await.expect("join"));
 

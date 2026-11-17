@@ -248,6 +248,15 @@ async fn current_art_url(player: &Proxy<'_>) -> Option<String> {
 }
 
 /// Local art (`file://`) goes to the phone as a payload, like `AlbumArtCache` expects.
+static SENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// One running album art transfer; frees its place when dropped.
+struct Slot;
+impl Drop for Slot {
+    fn drop(&mut self) {
+        SENDING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 async fn send_album_art(name: &str, url: &str, sink: &Sink) {
     let Some(path) = url.strip_prefix("file://").map(|p| glide_sdk::chooser::uri_path(&format!("file://{p}"))) else {
         return; // http(s) art the phone downloads itself
@@ -257,6 +266,12 @@ async fn send_album_art(name: &str, url: &str, sink: &Sink) {
     if !meta.is_file() || meta.len() > MAX_ART_BYTES {
         return;
     }
+    // A few transfers at a time, so repeated requests can't hold every payload port.
+    if SENDING.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 3 {
+        SENDING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    let _slot = Slot;
     let Ok(file) = tokio::fs::File::open(&path).await else { return };
     let Ok(listener) = crate::payload::PayloadListener::bind(&sink.cert, sink.fingerprint.clone()).await else {
         return;
