@@ -25,7 +25,7 @@ ignored by KDE Connect.
 | Connectivity (signal per SIM) | ✓ | — | `kdeconnect.connectivity_report` |
 | Contacts | ✓ synced to `~/.local/share/kpeoplevcard` | — | `kdeconnect.contacts.*` |
 | SMS (no MMS) | ✓ conversations in the window (new ones arrive as the SMS app's notification) | ✓ reply / send from the computer | `kdeconnect.sms.*` |
-| Share input devices (cursor across the screen edge) | ✓ phone side | ✗ needs an InputCapture portal in the Glide compositor | `kdeconnect.shareinputdevices*` |
+| Share input devices (cursor across the screen edge) | ✓ phone takes the cursor, hands it back at its edge | ✓ the cursor and keyboard go over at the chosen edge (layer-shell strip + pointer lock, no portal needed; Ctrl+Alt+Esc takes it back) | `kdeconnect.shareinputdevices*`, `mousepad.request` |
 | **Wake-on-LAN** (Glide only) | ✓ wake a sleeping computer | ✓ computer sends its MACs | `glide.wol` |
 | **Screenshot sync** (Glide only) | ✓ new screenshots go to the computer | — | `kdeconnect.share.request` |
 | **Charge alerts** (Glide only) | ✓ "laptop low / charged" on the phone | ✓ "phone charged" on the computer | `kdeconnect.battery` |
@@ -33,8 +33,8 @@ ignored by KDE Connect.
 ## Not done
 
 - MMS (by decision), Bluetooth backend, SFTP on Android 7.
-- Share input devices from the computer: the compositor needs `org.freedesktop.portal.InputCapture`.
-- The top-bar applet lives in the Glide shell repository.
+- The top-bar applet lives in glide-shell; `the_top_bar_applet_sees_every_battery_change` checks
+  it against our ListDevicesJson by its own parsing rules.
 
 ## Hardening (desktop)
 
@@ -64,6 +64,7 @@ the computer, and computer → phone ping, shared text and typed text.
 
 Desktop: `cargo test` (unit + integration on a private D-Bus bus: MPRIS both ways, notification
 monitor, payload server, run command output), `cargo clippy --all-targets` clean; uinput device
-and tablet creation checked by hand (`--ignored` tests). Phone: unit tests, lint, 42 instrumented
+and tablet creation checked by hand (`--ignored` tests), as is the cursor going over at the edge
+on the Glide compositor (`pushing_into_the_edge_takes_the_cursor_until_released`, virtual mouse). Phone: unit tests, lint, 42 instrumented
 tests on an emulator (loopback protocol tests, touchpad, digitizer, media notification, …), CI
 build on GitHub (branch builds and a tag release). Not yet exercised on a physical phone.
