@@ -116,6 +116,7 @@ impl PhoneService {
                 "kdeconnect.systemvolume.request".to_string(),
                 "kdeconnect.notification.request".to_string(),
                 "kdeconnect.telephony".to_string(),
+                "kdeconnect.connectivity_report".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),

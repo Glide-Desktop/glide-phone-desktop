@@ -54,6 +54,7 @@ pub struct PhoneDeviceState {
     pub seen_notifications: HashMap<String, (String, String)>,
     pub peer_fingerprint: Option<String>,
     pub connected: bool,
+    pub signals: Vec<crate::plugins::connectivity::Signal>,
 }
 
 pub struct PhoneManager {
@@ -98,6 +99,7 @@ impl PhoneManager {
                     seen_notifications: HashMap::new(),
                     peer_fingerprint: Some(paired.fingerprint.clone()),
                     connected: false,
+                    signals: Vec::new(),
                 },
             );
         }
@@ -162,6 +164,7 @@ impl PhoneManager {
             seen_notifications: HashMap::new(),
             peer_fingerprint: paired_fp.filter(|s| !s.is_empty()),
             connected: false,
+            signals: Vec::new(),
         });
         let changed = entry.name != name
             || entry.device_type != device_type
@@ -347,6 +350,7 @@ impl PhoneManager {
         self.presenter_events.retain(|(id, _)| id != device_id);
         if let Some(dev) = self.devices.get_mut(device_id) {
             dev.connected = false;
+            dev.signals.clear();
             if dev.pair_state == PairState::RequestedByPeer {
                 dev.pair_state = PairState::Unpaired;
             }
@@ -531,6 +535,13 @@ impl PhoneManager {
         match packet.packet_type.as_str() {
             crate::plugins::remote_media::PACKET_TYPE_MPRIS => {
                 self.handle_phone_media(device_id, packet, payload);
+                true
+            }
+            crate::plugins::connectivity::PACKET_TYPE_CONNECTIVITY_REPORT => {
+                if let Some(device) = self.devices.get_mut(device_id) {
+                    device.signals = crate::plugins::connectivity::parse(&packet.body);
+                    self.notify.notify_waiters();
+                }
                 true
             }
             crate::plugins::telephony::PACKET_TYPE_TELEPHONY => {
@@ -758,6 +769,7 @@ impl PhoneManager {
                     notifications,
                     peer_fingerprint: s.peer_fingerprint.clone(),
                     connected: s.connected,
+                    signals: s.signals.clone(),
                 }
             })
             .collect();

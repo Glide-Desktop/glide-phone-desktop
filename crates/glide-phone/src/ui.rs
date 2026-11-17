@@ -51,6 +51,8 @@ pub struct PhoneCardData {
     pub peer_fingerprint: Option<String>,
     #[serde(default)]
     pub connected: bool,
+    #[serde(default)]
+    pub signals: Vec<crate::plugins::connectivity::Signal>,
 }
 
 fn short_verification_code(fp: &str) -> String {
@@ -260,6 +262,12 @@ impl PhoneApp {
             }
         }
 
+        let network: String = dev
+            .signals
+            .iter()
+            .map(|s| format!(" · {}", crate::plugins::connectivity::label(s)))
+            .collect::<Vec<_>>()
+            .concat();
         if let Some(b) = &dev.battery {
             let state = if b.is_charging {
                 shell.t("заряджається", "charging")
@@ -268,9 +276,9 @@ impl PhoneApp {
             } else {
                 shell.t("від батареї", "on battery")
             };
-            format!("{kind_label} · {}% ({state})", b.charge)
+            format!("{kind_label} · {}% ({state}){network}", b.charge)
         } else if dev.connected {
-            format!("{kind_label} · {}", shell.t("Активне з'єднання LAN", "Active LAN session"))
+            format!("{kind_label} · {}{network}", shell.t("Активне з'єднання LAN", "Active LAN session"))
         } else {
             kind_label.to_string()
         }

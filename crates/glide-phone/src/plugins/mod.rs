@@ -1,5 +1,6 @@
 pub mod battery;
 pub mod clipboard;
+pub mod connectivity;
 pub mod find_device;
 pub mod mpris;
 pub mod notifications;
