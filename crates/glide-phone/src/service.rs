@@ -122,6 +122,7 @@ impl PhoneService {
                 "kdeconnect.digitizer".to_string(),
                 "kdeconnect.contacts.response_uids_timestamps".to_string(),
                 "kdeconnect.contacts.response_vcards".to_string(),
+                "kdeconnect.sms.messages".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -135,6 +136,9 @@ impl PhoneService {
                 "kdeconnect.mousepad.echo".to_string(),
                 "kdeconnect.contacts.request_all_uids_timestamps".to_string(),
                 "kdeconnect.contacts.request_vcards_by_uid".to_string(),
+                "kdeconnect.sms.request".to_string(),
+                "kdeconnect.sms.request_conversations".to_string(),
+                "kdeconnect.sms.request_conversation".to_string(),
                 "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.battery".to_string(),
                 "kdeconnect.clipboard".to_string(),

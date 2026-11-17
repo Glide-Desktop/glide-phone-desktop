@@ -13,6 +13,7 @@ pub mod runcommand;
 pub mod send_notifications;
 pub mod sftp;
 pub mod share;
+pub mod sms;
 pub mod systemvolume;
 pub mod telephony;
 

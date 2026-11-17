@@ -155,6 +155,19 @@ impl PhoneDaemon {
         self.manager.lock().await.ping(device_id).is_ok()
     }
 
+    /// The phones' messages: `{device id: inbox}`.
+    pub async fn list_sms_json(&self) -> String {
+        serde_json::to_string(&self.manager.lock().await.sms).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub async fn request_sms_thread(&self, device_id: &str, thread: i64) -> bool {
+        self.manager.lock().await.request_sms_thread(device_id, thread).is_ok()
+    }
+
+    pub async fn send_sms(&self, device_id: &str, addresses: Vec<String>, text: &str) -> bool {
+        self.manager.lock().await.send_sms(device_id, &addresses, text).is_ok()
+    }
+
     pub async fn take_presenter_event(&self) -> String {
         let mut mgr = self.manager.lock().await;
         mgr.take_presenter_event().and_then(|event| serde_json::to_string(&event).ok()).unwrap_or_default()

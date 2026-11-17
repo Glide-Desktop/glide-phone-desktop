@@ -73,6 +73,8 @@ pub struct PhoneManager {
     remote_input: bool,
     mousepad: crate::plugins::mousepad::Mousepad,
     digitizer: Option<crate::plugins::digitizer::Digitizer>,
+    /// The phones' text messages, by device.
+    pub sms: HashMap<String, crate::plugins::sms::Inbox>,
     /// The phones' media players, by device.
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// Set when a phone asked to set commands up here; the window opens that section.
@@ -121,6 +123,7 @@ impl PhoneManager {
             commands: crate::plugins::runcommand::Commands::load(commands_path),
             commands_setup_requested: false,
             phone_media: HashMap::new(),
+            sms: HashMap::new(),
             input: None,
             remote_input: false,
             mousepad: crate::plugins::mousepad::Mousepad::default(),
@@ -394,6 +397,9 @@ impl PhoneManager {
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
+        if let Some(inbox) = self.sms.get_mut(device_id) {
+            inbox.synced = false; // the next connect resyncs quietly
+        }
         if tokio::runtime::Handle::try_current().is_ok() {
             let id = device_id.to_string();
             tokio::spawn(async move { crate::plugins::sftp::unmount(&id).await });
@@ -579,6 +585,49 @@ impl PhoneManager {
         true
     }
 
+    fn handle_sms(&mut self, device_id: &str, device_name: &str, packet: &NetworkPacket) {
+        let inbox = self.sms.entry(device_id.to_string()).or_default();
+        let fresh = inbox.merge(&packet.body);
+        // The conversation list comes newest first: after its first packet, only messages
+        // newer than everything seen are new.
+        inbox.synced = true;
+        if let Some(sender) = self.senders.get(device_id).cloned() {
+            let names = crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(device_id));
+            for message in fresh {
+                let number = message.addresses.first().cloned().unwrap_or_default();
+                let name = names.get(&crate::plugins::contacts::number_key(&number)).cloned().unwrap_or(number);
+                crate::plugins::sms::announce(device_name, &name, &message, sender.clone());
+            }
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// Asks the phone for a thread's history.
+    pub fn request_sms_thread(
+        &self, device_id: &str, thread: i64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        self.send_to_device(device_id, crate::plugins::sms::request_thread_packet(thread, 100));
+        Ok(())
+    }
+
+    /// Sends a text message through the phone.
+    pub fn send_sms(
+        &self, device_id: &str, addresses: &[String], text: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        if addresses.is_empty() || text.trim().is_empty() {
+            return Err("nothing to send".into());
+        }
+        let sub_id = self
+            .sms
+            .get(device_id)
+            .and_then(|inbox| inbox.threads.values().flatten().find(|m| m.addresses == addresses))
+            .map_or(-1, |m| m.sub_id);
+        self.send_to_device(device_id, crate::plugins::sms::send_packet(addresses, text.trim(), sub_id));
+        Ok(())
+    }
+
     fn handle_call(&self, device_id: &str, device_name: &str, packet: &NetworkPacket) {
         // Name the caller from the synced address book when the phone sent only a number.
         let mut body = packet.body.clone();
@@ -613,6 +662,10 @@ impl PhoneManager {
                 if let Some(digitizer) = &self.digitizer {
                     digitizer.pen(crate::plugins::digitizer::parse_event(&packet.body));
                 }
+                true
+            }
+            crate::plugins::sms::PACKET_TYPE_SMS_MESSAGES => {
+                self.handle_sms(device_id, device_name, packet);
                 true
             }
             crate::plugins::contacts::PACKET_TYPE_RESPONSE_UIDS => {

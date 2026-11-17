@@ -24,6 +24,9 @@ pub struct Panels {
     pad_travel: f32,
     pub typed: String,
     pub share_draft: String,
+    pub sms: std::collections::HashMap<String, crate::plugins::sms::Inbox>,
+    pub open_thread: Option<i64>,
+    pub sms_draft: String,
     pub draft_name: String,
     pub draft_command: String,
 }
@@ -47,6 +50,10 @@ pub enum PanelMessage {
     Ping,
     ShareDraft(String),
     Share,
+    OpenThread(i64),
+    CloseThread,
+    SmsDraft(String),
+    SendSms,
 }
 
 impl Panels {
@@ -118,6 +125,21 @@ impl Panels {
                     share_to_phone(&device, text.trim());
                 }
             }
+            PanelMessage::OpenThread(thread) => {
+                self.open_thread = Some(thread);
+                if let Some(device) = self.reachable.first() {
+                    if let Some(proxy) = proxy() {
+                        let _ = proxy.request_sms_thread(device, thread);
+                    } else if let Some(manager) = global_manager()
+                        && let Ok(guard) = manager.try_lock()
+                    {
+                        let _ = guard.request_sms_thread(device, thread);
+                    }
+                }
+            }
+            PanelMessage::CloseThread => self.open_thread = None,
+            PanelMessage::SmsDraft(text) => self.sms_draft = text,
+            PanelMessage::SendSms => self.send_sms(),
             PanelMessage::PhoneMedia(device, player, action) => {
                 if let Some(proxy) = proxy() {
                     let _ = proxy.phone_media_action(&device, &player, action);
@@ -138,6 +160,9 @@ impl Panels {
             sections.push(phone_media_group(self, shell));
         }
         if !self.reachable.is_empty() {
+            if self.inbox().is_some_and(|inbox| !inbox.threads.is_empty()) {
+                sections.push(messages_group(self, shell));
+            }
             sections.push(control_group(self, shell));
         }
         sections.push(commands_group(self, shell));
@@ -146,6 +171,30 @@ impl Panels {
 }
 
 impl Panels {
+    fn inbox(&self) -> Option<&crate::plugins::sms::Inbox> {
+        self.sms.get(self.reachable.first()?)
+    }
+
+    fn send_sms(&mut self) {
+        let text = std::mem::take(&mut self.sms_draft);
+        let (Some(device), Some(thread)) = (self.reachable.first().cloned(), self.open_thread) else { return };
+        let Some(addresses) =
+            self.inbox().and_then(|i| i.threads.get(&thread)).and_then(|t| t.last()).map(|m| m.addresses.clone())
+        else {
+            return;
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Some(proxy) = proxy() {
+            let _ = proxy.send_sms(&device, addresses, &text);
+        } else if let Some(manager) = global_manager()
+            && let Ok(guard) = manager.try_lock()
+        {
+            let _ = guard.send_sms(&device, &addresses, &text);
+        }
+    }
+
     /// Sends a mousepad request to the first reachable phone.
     fn input(&self, body: serde_json::Value) {
         let Some(device) = self.reachable.first() else { return };
@@ -353,4 +402,64 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
         .description(device)
         .push(column![pad, keys, typing, share].spacing(10))
         .into()
+}
+
+/// The phone's text messages: conversations, or one thread with a reply box.
+fn messages_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    let paint = shell.paint();
+    let mut group = widget::Group::new(paint).title(shell.t("Повідомлення", "Messages"));
+    let Some(inbox) = panels.inbox() else { return group.into() };
+    let names = panels
+        .reachable
+        .first()
+        .map(|device| crate::plugins::contacts::names(&crate::plugins::contacts::book_dir(device)))
+        .unwrap_or_default();
+    let who = |message: &crate::plugins::sms::Message| {
+        let number = message.addresses.join(", ");
+        message
+            .addresses
+            .first()
+            .and_then(|a| names.get(&crate::plugins::contacts::number_key(a)).cloned())
+            .unwrap_or(number)
+    };
+    if let Some(thread) = panels.open_thread
+        && let Some(messages) = inbox.threads.get(&thread)
+    {
+        let title = messages.last().map(&who).unwrap_or_default();
+        group = group.suffix(widget::compact_button(
+            paint,
+            shell.t("До розмов", "All conversations"),
+            Tone::Neutral,
+            Some(Message::Panel(PanelMessage::CloseThread)),
+        ));
+        group = group.push(widget::ListRow::new(paint, title).strong());
+        for message in messages.iter().rev().take(15).rev() {
+            let label = if message.incoming() { "←" } else { "→" };
+            group = group.push(widget::ListRow::new(paint, format!("{label} {}", message.body)));
+        }
+        let reply = row![
+            widget::text_field(paint, shell.t("Відповідь", "Reply"), &panels.sms_draft, |v| {
+                Message::Panel(PanelMessage::SmsDraft(v))
+            }),
+            widget::compact_button(
+                paint,
+                shell.t("Надіслати", "Send"),
+                Tone::Tonal,
+                Some(Message::Panel(PanelMessage::SendSms))
+            ),
+        ]
+        .spacing(8);
+        return group.push(reply).into();
+    }
+    for (thread, last) in inbox.conversations().into_iter().take(20) {
+        group = group.push(widget::ListRow::new(paint, who(last)).subtitle(last.body.as_str()).suffix(
+            widget::compact_button(
+                paint,
+                shell.t("Відкрити", "Open"),
+                Tone::Neutral,
+                Some(Message::Panel(PanelMessage::OpenThread(thread))),
+            ),
+        ));
+    }
+    group.into()
 }

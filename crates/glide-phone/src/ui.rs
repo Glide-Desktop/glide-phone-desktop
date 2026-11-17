@@ -92,6 +92,7 @@ pub struct State {
     pub commands: Vec<crate::panels::CommandRow>,
     pub setup_requested: bool,
     pub phone_media: crate::panels::PhoneMedia,
+    pub sms: std::collections::HashMap<String, crate::plugins::sms::Inbox>,
 }
 
 type Snapshot = Option<State>;
@@ -115,6 +116,7 @@ fn snapshot() -> Snapshot {
                 .ok()
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default(),
+            sms: proxy.list_sms_json().ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default(),
         });
     }
     let mut guard = global_manager()?.try_lock().ok()?;
@@ -125,6 +127,7 @@ fn snapshot() -> Snapshot {
         commands: crate::panels::command_rows(&guard.commands.entries),
         setup_requested,
         phone_media: guard.phone_media.clone(),
+        sms: guard.sms.clone(),
     })
 }
 
