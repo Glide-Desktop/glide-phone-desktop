@@ -1617,7 +1617,7 @@ fn the_cursor_goes_over_to_the_phone_at_the_edge_and_comes_back() {
     assert_eq!(got[0].packet_type, "kdeconnect.shareinputdevices.request");
     assert_eq!(got[0].body, json!({ "exitEdge": 2, "deltax": 0, "deltay": 300 }));
     assert_eq!(got[1].packet_type, "kdeconnect.mousepad.request");
-    assert_eq!(got[1].body, json!({ "dx": -4.0, "dy": 2.0 }));
+    assert_eq!(got[1].body, json!({ "dx": -4, "dy": 2 }));
 
     // The phone hands it back: further input stays here.
     let back = NetworkPacket::new("kdeconnect.shareinputdevices", json!({ "releaseDeltax": 0, "releaseDeltay": 280 }));

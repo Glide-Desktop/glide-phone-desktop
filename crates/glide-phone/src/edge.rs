@@ -153,6 +153,9 @@ pub fn special_key(sym: u32) -> Option<u64> {
 pub struct Translator {
     left_down: bool,
     dragging: bool,
+    /// Motion below a whole pixel, kept for the next event (the phone rounds every delta
+    /// away from zero, so fractions sent as they come would make its cursor run ahead).
+    rest: (f64, f64),
 }
 
 impl Translator {
@@ -175,7 +178,14 @@ impl Translator {
                     self.dragging = true;
                     out.push(pad(json!({ "singlehold": true })));
                 }
-                out.push(pad(json!({ "dx": dx, "dy": dy })));
+                self.rest.0 += dx;
+                self.rest.1 += dy;
+                let (x, y) = (self.rest.0.trunc(), self.rest.1.trunc());
+                self.rest = (self.rest.0 - x, self.rest.1 - y);
+                if x != 0.0 || y != 0.0 {
+                    #[allow(clippy::cast_possible_truncation)]
+                    out.push(pad(json!({ "dx": x as i64, "dy": y as i64 })));
+                }
                 out
             }
             Captured::Button { code, pressed } => match (*code, *pressed) {
@@ -739,8 +749,12 @@ mod tests {
         let drag = bodies(&mut t, &[press, Captured::Motion { dx: 3.0, dy: 1.5 }, release]);
         assert_eq!(
             drag,
-            [json!({ "singlehold": true }), json!({ "dx": 3.0, "dy": 1.5 }), json!({ "singlerelease": true })]
+            [json!({ "singlehold": true }), json!({ "dx": 3, "dy": 1 }), json!({ "singlerelease": true })]
         );
+        // Fractions add up instead of each being rounded up by the phone (0.5 is left over).
+        let fine = bodies(&mut t, &[Captured::Motion { dx: 0.4, dy: 0.0 }]);
+        assert!(fine.is_empty(), "{fine:?}");
+        assert_eq!(bodies(&mut t, &[Captured::Motion { dx: 0.0, dy: 0.6 }]), [json!({ "dx": 0, "dy": 1 })]);
         assert_eq!(
             bodies(
                 &mut t,
