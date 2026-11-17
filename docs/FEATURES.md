@@ -45,6 +45,14 @@ mount; contacts, SMS threads, media players, run commands, typed text and input 
 bounded; the payload port waits for the pinned receiver instead of the first connection; nothing
 but pairing (not even the battery) reaches an unpaired device.
 
+## Hardening (phone)
+
+Nothing from the network is parsed deeper than 64 brackets (Android's org.json would overflow the
+stack and kill the app); SFTP serves only the storage volumes, never the app's own data (host key,
+trusted devices, preferences); the computer can act only on notifications it was sent, from apps
+still allowed; received files open only on the user's tap (Android 10+); MACs, device types,
+media players, album art, downloads and dials before pairing are all bounded.
+
 ## Verified
 
 **Live, between the two real implementations** (`scripts/live-desktop-test.sh` in the phone repo:
