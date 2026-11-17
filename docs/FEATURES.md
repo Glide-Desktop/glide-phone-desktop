@@ -36,6 +36,15 @@ ignored by KDE Connect.
 - Share input devices from the computer: the compositor needs `org.freedesktop.portal.InputCapture`.
 - The top-bar applet lives in the Glide shell repository.
 
+## Hardening (desktop)
+
+A paired phone is trusted with input by design, but not with the rest of the computer:
+album art is served only when it is the player's own `mpris:artUrl`; an SFTP login is used only
+right after our own request, only from the phone's address, and never opens a path outside the
+mount; contacts, SMS threads, media players, run commands, typed text and input events are all
+bounded; the payload port waits for the pinned receiver instead of the first connection; nothing
+but pairing (not even the battery) reaches an unpaired device.
+
 ## Verified
 
 **Live, between the two real implementations** (`scripts/live-desktop-test.sh` in the phone repo:
