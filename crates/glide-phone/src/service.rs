@@ -11,7 +11,6 @@ use crate::crypto::cert::{IdentityCert, compute_fingerprint};
 use crate::crypto::tls::{make_client_config, make_server_config};
 use crate::discovery::udp::{DiscoveredPeer, broadcast_identity, receive_discovery_packet, send_direct_discovery};
 use crate::link::framed::PacketStream;
-use crate::plugins::battery::local_battery_packet;
 use crate::plugins::notifications::create_request_packet;
 use crate::plugins::share::{SharePayload, handle_share_packet};
 use crate::protocol::identity::{IdentityBody, MAX_TCP_PORT, MIN_TCP_PORT, PROTOCOL_VERSION};
@@ -376,10 +375,6 @@ impl PhoneService {
         tracing::info!(%peer_addr, %peer_id, "phone session established");
         self.manager.lock().await.remember_address(&peer_id, peer_addr.ip());
 
-        // Nothing but pairing goes to a device that isn't paired, the battery included.
-        if is_paired && let Some(battery_pkt) = local_battery_packet() {
-            let _ = packet_stream.send_packet(&battery_pkt).await;
-        }
         if is_paired {
             let _ = packet_stream.send_packet(&create_request_packet()).await;
         }

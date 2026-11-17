@@ -258,6 +258,8 @@ impl PhoneManager {
             crate::plugins::contacts::request_uids_packet(),
             crate::plugins::wol::packet(&crate::plugins::wol::local_macs()),
         ];
+        // Only paired phones are greeted, so the battery never reaches a stranger.
+        packets.extend(crate::plugins::battery::local_battery_packet());
         if let Some((content, timestamp)) = &self.clipboard
             && *timestamp > 0
         {
