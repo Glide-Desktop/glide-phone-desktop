@@ -51,6 +51,9 @@ pub enum PanelMessage {
     Ping,
     ShareDraft(String),
     Share,
+    /// Read this computer's clipboard (the window has focus) and send it to the phone.
+    SendClipboard,
+    ClipboardRead(Option<String>),
     OpenThread(i64),
     CloseThread,
     SmsDraft(String),
@@ -58,18 +61,9 @@ pub enum PanelMessage {
 }
 
 impl Panels {
-    pub fn update(&mut self, message: PanelMessage) -> Task<Message> {
+    /// The "Control the phone" section's messages; anything else comes back as `Err`.
+    fn update_control(&mut self, message: PanelMessage) -> Result<Task<Message>, PanelMessage> {
         match message {
-            PanelMessage::CommandName(name) => self.draft_name = name,
-            PanelMessage::CommandLine(line) => self.draft_command = line,
-            PanelMessage::AddCommand => {
-                add_command(&std::mem::take(&mut self.draft_name), &std::mem::take(&mut self.draft_command));
-                return Task::done(Message::Refresh);
-            }
-            PanelMessage::RemoveCommand(key) => {
-                remove_command(&key);
-                return Task::done(Message::Refresh);
-            }
             PanelMessage::PadPress => {
                 self.pad_down = true;
                 self.pad_travel = 0.0;
@@ -126,6 +120,43 @@ impl Panels {
                     share_to_phone(&device, text.trim());
                 }
             }
+            PanelMessage::SendClipboard => {
+                return Ok(
+                    glide_sdk::iced::clipboard::read().map(|text| Message::Panel(PanelMessage::ClipboardRead(text)))
+                );
+            }
+            PanelMessage::ClipboardRead(text) => {
+                if let (Some(text), Some(device)) = (text.filter(|t| !t.is_empty()), self.reachable.first()) {
+                    if let Some(proxy) = proxy() {
+                        let _ = proxy.set_clipboard(device, &text);
+                    } else if let Some(manager) = global_manager()
+                        && let Ok(mut guard) = manager.try_lock()
+                    {
+                        let _ = guard.set_clipboard(device, &text);
+                    }
+                }
+            }
+            other => return Err(other),
+        }
+        Ok(Task::none())
+    }
+
+    pub fn update(&mut self, message: PanelMessage) -> Task<Message> {
+        let message = match self.update_control(message) {
+            Ok(task) => return task,
+            Err(other) => other,
+        };
+        match message {
+            PanelMessage::CommandName(name) => self.draft_name = name,
+            PanelMessage::CommandLine(line) => self.draft_command = line,
+            PanelMessage::AddCommand => {
+                add_command(&std::mem::take(&mut self.draft_name), &std::mem::take(&mut self.draft_command));
+                return Task::done(Message::Refresh);
+            }
+            PanelMessage::RemoveCommand(key) => {
+                remove_command(&key);
+                return Task::done(Message::Refresh);
+            }
             PanelMessage::OpenThread(thread) => {
                 self.open_thread = Some(thread);
                 if let Some(device) = self.reachable.first() {
@@ -150,6 +181,8 @@ impl Panels {
                     let _ = guard.control_phone_media(&device, &player, serde_json::json!({ "action": action }));
                 }
             }
+            // Handled by update_control above.
+            _ => {}
         }
         Task::none()
     }
@@ -396,6 +429,12 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
             Some(Message::Panel(PanelMessage::Share))
         ),
         widget::compact_button(paint, "Ping", Tone::Neutral, Some(Message::Panel(PanelMessage::Ping))),
+        widget::compact_button(
+            paint,
+            shell.t("Буфер обміну", "Clipboard"),
+            Tone::Neutral,
+            Some(Message::Panel(PanelMessage::SendClipboard))
+        ),
     ]
     .spacing(8);
     let keyboard_off = panels.reachable.first().and_then(|id| panels.keyboard_off.get(id)).copied().unwrap_or(false);
