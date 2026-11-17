@@ -9,13 +9,13 @@ ignored by KDE Connect.
 |---|---|---|---|
 | Pairing, TLS, discovery (UDP, mDNS on phone, custom hosts) | ✓ | ✓ | `kdeconnect.identity`, `kdeconnect.pair` |
 | Battery | ✓ phone level, low warning | ✓ computer level on every change | `kdeconnect.battery` |
-| Clipboard (+ newest wins on connect) | ✓ | ✓ (`wl-paste --watch`, needs data-control) | `kdeconnect.clipboard(.connect)` |
+| Clipboard (+ newest wins on connect) | ✓ | ✓ automatic with `wl-paste --watch` (needs data-control); on Glide the window's Clipboard button | `kdeconnect.clipboard(.connect)` |
 | Notifications (actions, replies, icons/avatars) | ✓ phone → desktop popups | ✓ desktop → phone (D-Bus monitor) | `kdeconnect.notification*` |
 | Find my device | ✓ ring the computer | ✓ ring the phone | `kdeconnect.findmyphone.request` |
 | Ping | ✓ | ✓ | `kdeconnect.ping` |
 | Share files / text / links (batches, cancel) | ✓ | ✓ (payload server, file picker) | `kdeconnect.share.request(.update)` |
 | Presenter (pointer, slides, volume keys) | ✓ | — (phone is the remote) | `kdeconnect.presenter`, `mousepad.request` |
-| Mouse & keyboard | ✓ phone drives the computer (`/dev/uinput`) | ✓ computer drives the phone (accessibility + IME) | `kdeconnect.mousepad.*` |
+| Mouse & keyboard | ✓ phone drives the computer (`/dev/uinput`; text via the Wayland virtual keyboard where offered, else key codes / paste) | ✓ computer drives the phone (accessibility + IME) | `kdeconnect.mousepad.*` |
 | Drawing tablet | ✓ phone pen → virtual tablet | — | `kdeconnect.digitizer(.session)` |
 | Run commands (+ live output, widget, device controls) | ✓ phone runs computer commands | — | `kdeconnect.runcommand*` |
 | Media control | ✓ phone controls computer players (MPRIS) | ✓ computer controls phone players (exported as MPRIS) | `kdeconnect.mpris(.request)` |
@@ -24,7 +24,7 @@ ignored by KDE Connect.
 | Telephony (calls, mute, pause media) | ✓ | ✓ mute from the notification | `kdeconnect.telephony*` |
 | Connectivity (signal per SIM) | ✓ | — | `kdeconnect.connectivity_report` |
 | Contacts | ✓ synced to `~/.local/share/kpeoplevcard` | — | `kdeconnect.contacts.*` |
-| SMS (no MMS) | ✓ conversations, new-message notifications | ✓ reply / send from the computer | `kdeconnect.sms.*` |
+| SMS (no MMS) | ✓ conversations in the window (new ones arrive as the SMS app's notification) | ✓ reply / send from the computer | `kdeconnect.sms.*` |
 | Share input devices (cursor across the screen edge) | ✓ phone side | ✗ needs an InputCapture portal in the Glide compositor | `kdeconnect.shareinputdevices*` |
 | **Wake-on-LAN** (Glide only) | ✓ wake a sleeping computer | ✓ computer sends its MACs | `glide.wol` |
 | **Screenshot sync** (Glide only) | ✓ new screenshots go to the computer | — | `kdeconnect.share.request` |
@@ -38,8 +38,15 @@ ignored by KDE Connect.
 
 ## Verified
 
+**Live, between the two real implementations** (`scripts/live-desktop-test.sh` in the phone repo:
+emulator ↔ this daemon in a private D-Bus session): glideProtocol marker, pairing (phone asks,
+computer accepts), the computer's greeting (commands, contacts request, glide.wol, keyboard
+state), MPRIS / system volume / run command requests and answers, the phone's battery shown on
+the computer, and computer → phone ping, shared text and typed text.
+
+
 Desktop: `cargo test` (unit + integration on a private D-Bus bus: MPRIS both ways, notification
 monitor, payload server, run command output), `cargo clippy --all-targets` clean; uinput device
 and tablet creation checked by hand (`--ignored` tests). Phone: unit tests, lint, 42 instrumented
 tests on an emulator (loopback protocol tests, touchpad, digitizer, media notification, …), CI
-build on GitHub. **Not yet exercised live between a real phone and this desktop.**
+build on GitHub (branch builds and a tag release). Not yet exercised on a physical phone.
