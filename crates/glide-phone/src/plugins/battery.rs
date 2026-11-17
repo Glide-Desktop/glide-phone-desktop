@@ -33,6 +33,22 @@ impl BatteryPayload {
     }
 }
 
+/// Sends this computer's battery to the phones whenever it changes (KDE Connect's battery
+/// plugin reports every change, not only on connect).
+pub async fn watch(on_packet: impl Fn(NetworkPacket) + Send + 'static) {
+    let mut last: Option<serde_json::Value> = None;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let Some(packet) = local_battery_packet() else { continue };
+        if last.as_ref() != Some(&packet.body) {
+            if last.is_some() {
+                on_packet(packet.clone());
+            }
+            last = Some(packet.body);
+        }
+    }
+}
+
 #[must_use]
 pub fn local_battery_packet() -> Option<NetworkPacket> {
     let info = glide_desktop::battery::read_battery()?;

@@ -144,6 +144,11 @@ fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex
         let manager = notification_manager.clone();
         tokio::spawn(async move { manager.lock().await.forward_desktop_notification(&notification) });
     }));
+    let battery_manager = manager.clone();
+    rt.spawn(glide_phone::plugins::battery::watch(move |packet| {
+        let manager = battery_manager.clone();
+        tokio::spawn(async move { manager.lock().await.broadcast(&packet) });
+    }));
     let volume_manager = manager.clone();
     rt.spawn(glide_phone::plugins::systemvolume::watch(move |packet| {
         let manager = volume_manager.clone();
