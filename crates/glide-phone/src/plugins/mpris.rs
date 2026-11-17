@@ -29,9 +29,14 @@ struct Players {
     owners: HashMap<String, String>,
 }
 
-fn players() -> &'static Mutex<Players> {
-    static PLAYERS: OnceLock<Mutex<Players>> = OnceLock::new();
+/// Known players per bus (keyed by the bus's GUID), so separate buses never mix.
+fn registry() -> &'static Mutex<HashMap<String, Players>> {
+    static PLAYERS: OnceLock<Mutex<HashMap<String, Players>>> = OnceLock::new();
     PLAYERS.get_or_init(Mutex::default)
+}
+
+fn bus_key(conn: &Connection) -> String {
+    conn.server_guid().to_string()
 }
 
 /// The session bus, shared by every MPRIS task.
@@ -78,7 +83,7 @@ pub async fn refresh(conn: &Connection) -> Vec<String> {
         by_name.insert(shown, name);
     }
     let shown: Vec<String> = by_name.keys().cloned().collect();
-    *players().lock().await = Players { by_name, owners };
+    registry().lock().await.insert(bus_key(conn), Players { by_name, owners });
     shown
 }
 
@@ -87,14 +92,15 @@ pub fn list_packet(names: &[String]) -> NetworkPacket {
     NetworkPacket::new(PACKET_TYPE_MPRIS, json!({ "playerList": names, "supportAlbumArtPayload": true }))
 }
 
-async fn bus_of(name: &str) -> Option<String> {
-    players().lock().await.by_name.get(name).cloned()
+async fn bus_of(conn: &Connection, name: &str) -> Option<String> {
+    registry().lock().await.get(&bus_key(conn))?.by_name.get(name).cloned()
 }
 
-async fn name_of_owner(owner: &str) -> Option<String> {
-    let guard = players().lock().await;
-    let bus = guard.owners.get(owner)?;
-    guard.by_name.iter().find(|(_, b)| *b == bus).map(|(name, _)| name.clone())
+async fn name_of_owner(conn: &Connection, owner: &str) -> Option<String> {
+    let guard = registry().lock().await;
+    let players = guard.get(&bus_key(conn))?;
+    let bus = players.owners.get(owner)?;
+    players.by_name.iter().find(|(_, b)| *b == bus).map(|(name, _)| name.clone())
 }
 
 fn text(value: &Value<'_>) -> Option<String> {
@@ -124,7 +130,7 @@ fn number(value: &Value<'_>) -> Option<i64> {
 
 /// The now-playing packet for `name` (`MprisControlPlugin::sendPlayerStatus`).
 pub async fn state_packet(conn: &Connection, name: &str) -> Option<NetworkPacket> {
-    let bus = bus_of(name).await?;
+    let bus = bus_of(conn, name).await?;
     let player = proxy(conn, &bus, PLAYER).await.ok()?;
     let mut body = Map::new();
     body.insert("player".into(), json!(name));
@@ -178,7 +184,7 @@ pub async fn handle_request(conn: &Connection, body: &Json, sink: &Sink) {
         let _ = sink.sender.send(list_packet(&names));
     }
     let Some(name) = body.get("player").and_then(Json::as_str) else { return };
-    let Some(bus) = bus_of(name).await else { return };
+    let Some(bus) = bus_of(conn, name).await else { return };
     let Ok(player) = proxy(conn, &bus, PLAYER).await else { return };
     if let Some(action) = body.get("action").and_then(Json::as_str)
         && matches!(action, "Play" | "Pause" | "PlayPause" | "Next" | "Previous" | "Stop")
@@ -282,7 +288,7 @@ pub async fn watch(conn: Connection, on_packet: impl Fn(NetworkPacket) + Send + 
         }
         let sender = message.header().sender().map(ToString::to_string);
         if let Some(sender) = sender
-            && let Some(name) = name_of_owner(&sender).await
+            && let Some(name) = name_of_owner(&conn, &sender).await
             && let Some(packet) = state_packet(&conn, &name).await
         {
             on_packet(packet);
