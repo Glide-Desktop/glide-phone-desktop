@@ -1627,3 +1627,56 @@ fn the_cursor_goes_over_to_the_phone_at_the_edge_and_comes_back() {
     assert!(manager.set_share_input_edge(None));
     assert_eq!(manager.share_input_edge(), None);
 }
+
+/// The top-bar applet (glide-shell, crates/glide-compositor/src/phone_applet.rs) reads
+/// ListDevicesJson every 2 s and on StateChanged. This parses our output by its rules (same
+/// fields, same choice of device) so a change on this side can't silently break it.
+#[test]
+fn the_top_bar_applet_sees_every_battery_change() {
+    use glide_phone::config::PairedDevice;
+    #[derive(serde::Deserialize)]
+    struct WireBattery {
+        #[serde(alias = "current_charge")]
+        charge: i32,
+        #[serde(default)]
+        is_charging: bool,
+    }
+    #[derive(serde::Deserialize)]
+    struct WireDevice {
+        id: String,
+        #[serde(default)]
+        connected: bool,
+        #[serde(default)]
+        pair_state: String,
+        #[serde(default)]
+        battery: Option<WireBattery>,
+    }
+    fn applet(json: &str) -> Option<(String, Option<i32>, bool)> {
+        let devices: Vec<WireDevice> = serde_json::from_str(json).ok()?;
+        let priority = |d: &WireDevice| match (d.pair_state.as_str(), d.connected) {
+            ("RequestedByPeer", _) => Some(3),
+            ("Paired", true) => Some(2),
+            ("Paired", false) => Some(1),
+            _ => None,
+        };
+        let chosen = devices.into_iter().filter_map(|d| Some((priority(&d)?, d))).max_by_key(|(p, _)| *p)?.1;
+        Some((chosen.id, chosen.battery.as_ref().map(|b| b.charge), chosen.battery.is_some_and(|b| b.is_charging)))
+    }
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let phone = PairedDevice { id: "pixel".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let old = PairedDevice { id: "old_phone".into(), name: "Old".into(), fingerprint: "BB".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![old, phone]), cert);
+    let (sender, _sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pixel".to_string(), sender, Some("AA".to_string()));
+    let battery = |charge: i32, charging: bool| {
+        NetworkPacket::new(
+            "kdeconnect.battery",
+            json!({ "currentCharge": charge, "isCharging": charging, "thresholdEvent": 0 }),
+        )
+    };
+    let shown = |m: &PhoneManager| applet(&serde_json::to_string(&m.sorted_cards()).unwrap());
+    manager.handle_packet("pixel", &battery(42, true)).expect("battery");
+    assert_eq!(shown(&manager), Some(("pixel".into(), Some(42), true)));
+    manager.handle_packet("pixel", &battery(41, false)).expect("battery");
+    assert_eq!(shown(&manager), Some(("pixel".into(), Some(41), false)), "the connected phone, its new level");
+}
