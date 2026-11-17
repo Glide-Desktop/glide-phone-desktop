@@ -585,7 +585,7 @@ impl PhoneManager {
             if let (Some(bytes), Some(name)) = (payload, packet.body.get("player").and_then(serde_json::Value::as_str))
                 && let Some(player) = players.get_mut(name).filter(|p| p.art_url == url)
             {
-                player.art_file = store_art(bytes, url);
+                player.art_file = store_art(bytes, &format!("{device_id}/{name}"), url);
                 self.notify.notify_waiters();
             }
             return;

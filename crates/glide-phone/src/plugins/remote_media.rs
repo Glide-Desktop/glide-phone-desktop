@@ -70,7 +70,7 @@ impl RemotePlayer {
     #[must_use]
     pub fn current_position(&self) -> i64 {
         let moved = match (self.is_playing, self.position_at) {
-            (true, Some(at)) => self.position + i64::try_from(at.elapsed().as_millis()).unwrap_or(0),
+            (true, Some(at)) => self.position.saturating_add(i64::try_from(at.elapsed().as_millis()).unwrap_or(0)),
             _ => self.position,
         };
         if self.length > 0 { moved.clamp(0, self.length) } else { moved.max(0) }
@@ -89,9 +89,17 @@ pub enum Update {
     Nothing,
 }
 
+/// At most this many players per phone (each one is exported on its own bus connection).
+pub const MAX_PLAYERS: usize = 16;
+
 pub fn apply(players: &mut BTreeMap<String, RemotePlayer>, body: &Json) -> Update {
     if let Some(list) = body.get("playerList").and_then(Json::as_array) {
-        let names: Vec<String> = list.iter().filter_map(Json::as_str).map(str::to_string).collect();
+        let mut names: Vec<String> = Vec::new();
+        for name in list.iter().filter_map(Json::as_str) {
+            if names.len() < MAX_PLAYERS && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
         players.retain(|name, _| names.contains(name));
         let fresh: Vec<String> = names.iter().filter(|name| !players.contains_key(*name)).cloned().collect();
         for name in &fresh {
@@ -102,6 +110,9 @@ pub fn apply(players: &mut BTreeMap<String, RemotePlayer>, body: &Json) -> Updat
     let Some(name) = body.get("player").and_then(Json::as_str) else { return Update::Nothing };
     if body.get("transferringAlbumArt").and_then(Json::as_bool).unwrap_or(false) {
         return Update::Nothing; // handled with its payload
+    }
+    if !players.contains_key(name) && players.len() >= MAX_PLAYERS {
+        return Update::Nothing;
     }
     let player = players.entry(name.to_string()).or_insert_with(|| RemotePlayer::new(name));
     let text =
@@ -151,16 +162,29 @@ pub fn state_request(player: &str) -> NetworkPacket {
     request(json!({ "player": player, "requestNowPlaying": true, "requestVolume": true }))
 }
 
-/// Saves album art the phone sent so MPRIS clients can show it as a file.
-#[must_use]
-pub fn store_art(bytes: &[u8], url: &str) -> Option<PathBuf> {
+fn short_hash(value: &str) -> String {
     use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Saves album art the phone sent so MPRIS clients can show it as a file. Each player
+/// (`owner`: device and player) keeps one file; its previous art is removed (the directory
+/// is in RAM).
+#[must_use]
+pub fn store_art(bytes: &[u8], owner: &str, url: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
     let dir = base.join("glide-phone-art");
     std::fs::create_dir_all(&dir).ok()?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut hasher);
-    let path = dir.join(format!("{:016x}", hasher.finish()));
+    let prefix = format!("{}-", short_hash(owner));
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    // A new name for new art, so clients that cache by URL notice the change.
+    let path = dir.join(format!("{prefix}{}", short_hash(url)));
     glide_config::write_atomic(&path, bytes, 0o600).ok()?;
     Some(path)
 }
@@ -274,7 +298,7 @@ impl Player {
             put(&mut map, "xesam:album", Value::from(s.album.as_str()));
         }
         if s.length > 0 {
-            put(&mut map, "mpris:length", Value::from(s.length * 1000));
+            put(&mut map, "mpris:length", Value::from(s.length.saturating_mul(1000)));
         }
         if let Some(file) = &s.art_file {
             put(&mut map, "mpris:artUrl", Value::from(format!("file://{}", file.display())));
@@ -285,7 +309,7 @@ impl Player {
     }
     #[zbus(property)]
     fn position(&self) -> i64 {
-        self.snapshot().current_position() * 1000
+        self.snapshot().current_position().saturating_mul(1000)
     }
     #[zbus(property)]
     fn volume(&self) -> f64 {
@@ -453,5 +477,18 @@ mod tests {
         assert_eq!(spotify.volume, 40);
         assert_eq!(apply(&mut players, &json!({"playerList": []})), Update::Players(Vec::new()));
         assert!(players.is_empty());
+    }
+
+    #[test]
+    fn a_phone_cannot_flood_us_with_players() {
+        let mut players = BTreeMap::new();
+        let many: Vec<String> = (0..1000).map(|i| format!("p{i}")).collect();
+        let Update::Players(fresh) = apply(&mut players, &json!({ "playerList": many })) else { panic!() };
+        assert_eq!(fresh.len(), MAX_PLAYERS);
+        assert_eq!(apply(&mut players, &json!({"player": "another", "title": "x"})), Update::Nothing);
+        assert_eq!(players.len(), MAX_PLAYERS);
+        // Huge phone values don't overflow.
+        apply(&mut players, &json!({"player": "p0", "pos": i64::MAX, "isPlaying": true, "length": i64::MAX}));
+        assert_eq!(players["p0"].current_position(), i64::MAX);
     }
 }

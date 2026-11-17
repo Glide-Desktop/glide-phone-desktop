@@ -236,7 +236,7 @@ async fn set_position(player: &Proxy<'_>, position_ms: i64) {
     if let Some(track) = track
         && let Ok(path) = zbus::zvariant::ObjectPath::try_from(track.as_str())
     {
-        let _ = player.call_method("SetPosition", &(path, position_ms.max(0) * 1000)).await;
+        let _ = player.call_method("SetPosition", &(path, position_ms.max(0).saturating_mul(1000))).await;
     }
 }
 
