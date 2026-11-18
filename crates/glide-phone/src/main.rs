@@ -153,6 +153,14 @@ fn start_watchers(rt: &tokio::runtime::Runtime, manager: &Arc<tokio::sync::Mutex
             edge_manager.lock().await.on_captured(&event);
         }
     });
+    // New screenshots taken here go to the phones (when the user turned that on).
+    if let Some(pictures) = glide_phone::plugins::screenshots::pictures_dir() {
+        let shots_manager = manager.clone();
+        rt.spawn(glide_phone::plugins::screenshots::watch(pictures, std::time::Duration::from_secs(2), move |path| {
+            let manager = shots_manager.clone();
+            tokio::spawn(async move { manager.lock().await.screenshot_taken(&path) });
+        }));
+    }
     let battery_manager = manager.clone();
     rt.spawn(glide_phone::plugins::battery::watch(move |packet| {
         let manager = battery_manager.clone();

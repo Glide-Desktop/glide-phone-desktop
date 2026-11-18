@@ -130,6 +130,16 @@ impl PhoneDaemon {
     }
 
     /// The phones' media players: `{device id: {player: state}}`.
+    /// Whether new screenshots go to the phones (Glide only).
+    pub async fn send_screenshots(&self) -> bool {
+        self.manager.lock().await.send_screenshots()
+    }
+
+    pub async fn set_send_screenshots(&self, enabled: bool) -> bool {
+        self.manager.lock().await.set_send_screenshots(enabled);
+        true
+    }
+
     /// Whether paired phones may browse this computer's home folder (Glide only).
     pub async fn computer_files_allowed(&self) -> bool {
         self.manager.lock().await.computer_files_allowed()

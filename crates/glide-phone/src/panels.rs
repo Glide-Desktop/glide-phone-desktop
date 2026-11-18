@@ -40,6 +40,8 @@ pub struct Panels {
     pub share_edge: Option<String>,
     /// Whether phones may browse this computer's files; read from the daemon once.
     pub files_allowed: Option<bool>,
+    /// Whether new screenshots go to the phones; read from the daemon once.
+    pub send_screenshots: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,8 @@ pub enum PanelMessage {
     CycleShareEdge,
     /// Let phones browse this computer's home folder, or stop it.
     ToggleComputerFiles,
+    /// Send new screenshots to the phones, or stop.
+    ToggleScreenshots,
     /// (device, stream, volume 0..=max) — the phone's own volume (Glide only).
     PhoneVolume(String, String, f32),
     PhoneMute(String, String, bool),
@@ -144,6 +148,7 @@ impl Panels {
             }
             PanelMessage::CycleShareEdge => self.cycle_share_edge(),
             PanelMessage::ToggleComputerFiles => self.toggle_computer_files(),
+            PanelMessage::ToggleScreenshots => self.toggle_screenshots(),
             PanelMessage::ClipboardRead(text) => {
                 if let (Some(text), Some(device)) = (text.filter(|t| !t.is_empty()), self.reachable.first()) {
                     if let Some(proxy) = proxy() {
@@ -175,6 +180,23 @@ impl Panels {
         };
         if ok {
             self.share_edge = Some(next.to_string());
+        }
+    }
+
+    fn toggle_screenshots(&mut self) {
+        let next = !self.send_screenshots.unwrap_or(false);
+        let ok = if let Some(proxy) = proxy() {
+            proxy.set_send_screenshots(next).unwrap_or(false)
+        } else if let Some(manager) = global_manager()
+            && let Ok(mut guard) = manager.try_lock()
+        {
+            guard.set_send_screenshots(next);
+            true
+        } else {
+            false
+        };
+        if ok {
+            self.send_screenshots = Some(next);
         }
     }
 
@@ -296,6 +318,13 @@ impl Panels {
 impl Panels {
     /// After each refresh: load names and, once per phone, ask for its conversations.
     pub fn refreshed(&mut self) {
+        if self.send_screenshots.is_none() {
+            self.send_screenshots = Some(if let Some(proxy) = proxy() {
+                proxy.send_screenshots().unwrap_or(false)
+            } else {
+                global_manager().and_then(|m| m.try_lock().ok()).is_some_and(|g| g.send_screenshots())
+            });
+        }
         if self.files_allowed.is_none() {
             self.files_allowed = Some(if let Some(proxy) = proxy() {
                 proxy.computer_files_allowed().unwrap_or(false)
@@ -526,6 +555,49 @@ fn phone_media_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Eleme
     group.into()
 }
 
+/// What this computer lets the phone do: the shared cursor's edge, its files, its screenshots.
+fn settings_rows<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    let paint = shell.paint();
+    // Moving the cursor past this screen edge carries it (and the keyboard) to the phone.
+    let edge_label = match panels.share_edge.as_deref().unwrap_or_default() {
+        "left" => shell.t("Курсор на телефон: зліва", "Cursor to the phone: left edge"),
+        "right" => shell.t("Курсор на телефон: справа", "Cursor to the phone: right edge"),
+        "top" => shell.t("Курсор на телефон: зверху", "Cursor to the phone: top edge"),
+        "bottom" => shell.t("Курсор на телефон: знизу", "Cursor to the phone: bottom edge"),
+        _ => shell.t("Курсор на телефон: вимкнено", "Cursor to the phone: off"),
+    };
+    let edge = row![
+        widget::compact_button(paint, edge_label, Tone::Neutral, Some(Message::Panel(PanelMessage::CycleShareEdge))),
+        glide_sdk::iced::widget::text(shell.t("Ctrl+Alt+Esc повертає курсор", "Ctrl+Alt+Esc brings it back")).size(12),
+    ]
+    .spacing(8)
+    .align_y(glide_sdk::iced::Alignment::Center);
+    // The phone may browse this computer's home folder (hidden files never).
+    let files_label = if panels.files_allowed.unwrap_or(false) {
+        shell.t("Файли комп’ютера на телефоні: увімкнено", "This computer's files on the phone: on")
+    } else {
+        shell.t("Файли комп’ютера на телефоні: вимкнено", "This computer's files on the phone: off")
+    };
+    let files = widget::compact_button(
+        paint,
+        files_label,
+        Tone::Neutral,
+        Some(Message::Panel(PanelMessage::ToggleComputerFiles)),
+    );
+    let shots_label = if panels.send_screenshots.unwrap_or(false) {
+        shell.t("Нові знімки екрана на телефон: увімкнено", "New screenshots to the phone: on")
+    } else {
+        shell.t("Нові знімки екрана на телефон: вимкнено", "New screenshots to the phone: off")
+    };
+    let shots = widget::compact_button(
+        paint,
+        shots_label,
+        Tone::Neutral,
+        Some(Message::Panel(PanelMessage::ToggleScreenshots)),
+    );
+    column![edge, files, shots].spacing(10).into()
+}
+
 /// KDE Connect's remote input for the phone: a touchpad, typing and special keys.
 fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
     use glide_sdk::iced::widget::{container, mouse_area, text};
@@ -588,32 +660,7 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
         ),
     ]
     .spacing(8);
-    // Moving the cursor past this screen edge carries it (and the keyboard) to the phone.
-    let edge_label = match panels.share_edge.as_deref().unwrap_or_default() {
-        "left" => shell.t("Курсор на телефон: зліва", "Cursor to the phone: left edge"),
-        "right" => shell.t("Курсор на телефон: справа", "Cursor to the phone: right edge"),
-        "top" => shell.t("Курсор на телефон: зверху", "Cursor to the phone: top edge"),
-        "bottom" => shell.t("Курсор на телефон: знизу", "Cursor to the phone: bottom edge"),
-        _ => shell.t("Курсор на телефон: вимкнено", "Cursor to the phone: off"),
-    };
-    let edge = row![
-        widget::compact_button(paint, edge_label, Tone::Neutral, Some(Message::Panel(PanelMessage::CycleShareEdge))),
-        glide_sdk::iced::widget::text(shell.t("Ctrl+Alt+Esc повертає курсор", "Ctrl+Alt+Esc brings it back")).size(12),
-    ]
-    .spacing(8)
-    .align_y(glide_sdk::iced::Alignment::Center);
-    // The phone may browse this computer's home folder (hidden files never).
-    let files_label = if panels.files_allowed.unwrap_or(false) {
-        shell.t("Файли комп’ютера на телефоні: увімкнено", "This computer's files on the phone: on")
-    } else {
-        shell.t("Файли комп’ютера на телефоні: вимкнено", "This computer's files on the phone: off")
-    };
-    let files = widget::compact_button(
-        paint,
-        files_label,
-        Tone::Neutral,
-        Some(Message::Panel(PanelMessage::ToggleComputerFiles)),
-    );
+    let settings = settings_rows(panels, shell);
     let keyboard_off = panels.reachable.first().and_then(|id| panels.keyboard_off.get(id)).copied().unwrap_or(false);
     let description = if keyboard_off {
         format!("{device} · {}", shell.t("клавіатура телефону зараз недоступна", "the phone's keyboard is unavailable"))
@@ -623,7 +670,7 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
     widget::Group::new(paint)
         .title(shell.t("Керувати телефоном", "Control the phone"))
         .description(description)
-        .push(column![pad, keys, typing, share, edge, files].spacing(10))
+        .push(column![pad, keys, typing, share, settings].spacing(10))
         .into()
 }
 

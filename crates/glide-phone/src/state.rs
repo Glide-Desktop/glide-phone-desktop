@@ -59,6 +59,15 @@ pub struct PhoneDeviceState {
     pub keyboard_off: bool,
 }
 
+/// Glide-only things the user turns on for the phones.
+#[derive(Default)]
+struct LocalSettings {
+    /// Paired phones may browse this computer's home folder.
+    files_allowed: bool,
+    /// New screenshots go to the phones.
+    send_screenshots: bool,
+}
+
 /// The cursor going over to a phone at a screen edge (`shareinputdevices`).
 #[derive(Default)]
 struct ShareInput {
@@ -102,8 +111,8 @@ pub struct PhoneManager {
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// The phones' own volumes (Glide only), by device.
     pub phone_volumes: HashMap<String, Vec<crate::plugins::phone_volume::PhoneSink>>,
-    /// Whether paired phones may browse this computer's home folder (off by default).
-    files_allowed: bool,
+    /// What the user allows phones (both off by default).
+    local: LocalSettings,
     files_allowed_path: Option<std::path::PathBuf>,
     /// Phones whose volume this computer may set (their identity accepts systemvolume.request).
     volume_receivers: std::collections::HashSet<String>,
@@ -124,6 +133,11 @@ impl PhoneManager {
         });
         let commands_path = config.config_path.as_ref().map(|path| path.with_file_name("phone-commands.json"));
         let files_allowed_path = config.config_path.as_ref().map(|p| p.with_file_name("phone-may-browse-files"));
+        let screenshots_enabled = config
+            .config_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p.with_file_name("send-screenshots")).ok())
+            .is_some_and(|t| t.trim() == "yes");
         let share_input = {
             let path = config.config_path.as_ref().map(|p| p.with_file_name("share-input-edge"));
             let edge = path
@@ -165,10 +179,13 @@ impl PhoneManager {
             phone_media: HashMap::new(),
             phone_volumes: HashMap::new(),
             volume_receivers: std::collections::HashSet::new(),
-            files_allowed: files_allowed_path
-                .as_ref()
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .is_some_and(|t| t.trim() == "yes"),
+            local: LocalSettings {
+                files_allowed: files_allowed_path
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .is_some_and(|t| t.trim() == "yes"),
+                send_screenshots: screenshots_enabled,
+            },
             files_allowed_path,
             sms: HashMap::new(),
             last_addresses: HashMap::new(),
@@ -284,14 +301,39 @@ impl PhoneManager {
     }
 
     /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
+    /// Whether new screenshots go to the phones.
+    #[must_use]
+    pub fn send_screenshots(&self) -> bool {
+        self.local.send_screenshots
+    }
+
+    pub fn set_send_screenshots(&mut self, enabled: bool) {
+        self.local.send_screenshots = enabled;
+        if let Some(path) = self.config.config_path.as_ref().map(|p| p.with_file_name("send-screenshots")) {
+            let _ = glide_config::write_atomic(&path, if enabled { b"yes" } else { b"no" }, 0o600);
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// A screenshot was taken here: send it to every connected phone, if the user wants that.
+    pub fn screenshot_taken(&self, path: &std::path::Path) {
+        if !self.local.send_screenshots {
+            return;
+        }
+        let phones: Vec<String> = self.senders.keys().filter(|id| self.is_paired(id)).cloned().collect();
+        for id in phones {
+            let _ = self.share_files(&id, vec![path.to_path_buf()]);
+        }
+    }
+
     /// Whether paired phones may browse this computer's home folder.
     #[must_use]
     pub fn computer_files_allowed(&self) -> bool {
-        self.files_allowed
+        self.local.files_allowed
     }
 
     pub fn set_computer_files_allowed(&mut self, allowed: bool) {
-        self.files_allowed = allowed;
+        self.local.files_allowed = allowed;
         if let Some(path) = &self.files_allowed_path {
             let _ = glide_config::write_atomic(path, if allowed { b"yes" } else { b"no" }, 0o600);
         }
@@ -302,7 +344,7 @@ impl PhoneManager {
     fn handle_files_request(&mut self, device_id: &str, body: &serde_json::Value) {
         use crate::plugins::computer_files;
         let path = body.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
-        let Some(root) = computer_files::root().filter(|_| self.files_allowed) else {
+        let Some(root) = computer_files::root().filter(|_| self.local.files_allowed) else {
             self.send_to_device(device_id, computer_files::error_packet(&path, "off"));
             return;
         };

@@ -12,6 +12,7 @@ pub mod phone_volume;
 pub mod presenter;
 pub mod remote_media;
 pub mod runcommand;
+pub mod screenshots;
 pub mod send_notifications;
 pub mod sftp;
 pub mod share;

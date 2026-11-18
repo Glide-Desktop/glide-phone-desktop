@@ -1790,3 +1790,38 @@ fn the_phone_browses_this_computers_files_only_when_allowed() {
     let answer = drain().into_iter().find(|p| p.packet_type == "glide.files").expect("refused");
     assert_eq!(answer.body["error"], "missing");
 }
+
+/// Glide only: a screenshot taken here goes to the phone, once the user turned that on.
+#[tokio::test]
+async fn screenshots_taken_here_go_to_the_phone_when_wanted() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    while sent.try_recv().is_ok() {}
+    let shot = std::env::temp_dir().join(format!("glide-screenshot-{}.png", std::process::id()));
+    std::fs::write(&shot, b"\x89PNG").unwrap();
+    manager.screenshot_taken(&shot);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        std::iter::from_fn(|| sent.try_recv().ok()).all(|p| p.packet_type != "kdeconnect.share.request"),
+        "off by default"
+    );
+    manager.set_send_screenshots(true);
+    manager.screenshot_taken(&shot);
+    let offer = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(p) = sent.recv().await
+                && p.packet_type == "kdeconnect.share.request"
+            {
+                return p;
+            }
+        }
+    })
+    .await
+    .expect("the screenshot is offered");
+    assert!(offer.body["filename"].as_str().unwrap().starts_with("glide-screenshot-"));
+    let _ = std::fs::remove_file(&shot);
+}
