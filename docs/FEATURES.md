@@ -55,6 +55,13 @@ media players, album art, downloads and dials before pairing are all bounded.
 
 ## Verified
 
+**Live, against the real KDE Connect Android** (1.37, built from source; `scripts/kde-connect-live-test.sh`
+in this repo, emulator ↔ this daemon in a private D-Bus session, passes repeatedly): connection over
+TLS, pairing requested by KDE Connect and accepted here (and the other way round, by hand), its
+battery and signal, its notifications, ping and a file from this computer, and KDE Connect running a
+command here. This run found and fixed the D-Bus `ShareFiles` panic. Not covered: payloads KDE
+Connect offers (notification icons), since nothing can connect into the emulator.
+
 **Live, between the two real implementations** (`scripts/live-desktop-test.sh` in the phone repo:
 emulator ↔ this daemon in a private D-Bus session): glideProtocol marker, pairing (phone asks,
 computer accepts), the computer's greeting (commands, contacts request, glide.wol, keyboard
