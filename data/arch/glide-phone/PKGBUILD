@@ -8,10 +8,7 @@ license=(GPL-3.0-or-later)
 depends=(
     glibc gcc-libs libglvnd vulkan-icd-loader wayland libxkbcommon hicolor-icon-theme
     glide-configd dbus xdg-utils wl-clipboard pipewire-audio sound-theme-freedesktop
-)
-optdepends=(
-    "sshfs: browse the phone's files"
-    "libpulse: the phone controls this computer's volume (pactl)"
+    sshfs libpulse
 )
 makedepends=(git cargo pkgconf)
 options=(!lto !debug)
