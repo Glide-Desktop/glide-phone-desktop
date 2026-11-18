@@ -30,9 +30,9 @@ column says why the other doesn't exist (in KDE Connect either).
 | Connectivity (signal per SIM) | ✓ reports | ✓ shows | phone → computer: the computer has no SIM | `kdeconnect.connectivity_report` |
 | Contacts | ✓ sends its address book | ✓ keeps it (`~/.local/share/kpeoplevcard`), names callers and SMS | phone → computer: the address book lives on the phone | `kdeconnect.contacts.*` |
 | SMS (no MMS) | ✓ serves conversations, sends | ✓ shows conversations, replies, writes new | both ends; SMS only exist on the phone | `kdeconnect.sms.*` |
-| Phone files (SFTP) | ✓ serves its storage | ✓ browses it (`sshfs` / `sftp://`) | computer → phone files: Share sends the computer's files to the phone | `kdeconnect.sftp(.request)` |
+| Files | ✓ serves its storage over SFTP; **browses the computer's home folder and downloads from it** (Glide only) | ✓ browses the phone (`sshfs` / `sftp://`); **lets the phone browse its home folder** (Glide only, off until allowed; no hidden files, no way out of home) | both ways | `kdeconnect.sftp(.request)`, `glide.files(.request)` |
 | **Wake-on-LAN** (Glide only) | ✓ wakes a sleeping computer | ✓ tells the phone its MACs | phone → computer: phones can't be woken over the network | `glide.wol` |
-| **Screenshot sync** (Glide only) | ✓ sends new screenshots | ✓ receives them (Share) | phone → computer (opt-in) | `kdeconnect.share.request` |
+| **Screenshot sync** (Glide only) | ✓ sends new screenshots (opt-in); receives the computer's | ✓ sends new screenshots (opt-in, Pictures folder); receives the phone's | both ways | `kdeconnect.share.request` |
 
 ## Not done
 
@@ -63,8 +63,9 @@ media players, album art, downloads and dials before pairing are all bounded.
 repo; fresh install on an emulator, private D-Bus session): pairing from the app's onboarding with
 the code confirmed on both sides, a battery change, a contact's picture arriving as the
 notification icon (not the app's), the phone's volume set from the computer and its volume button
-seen on the computer, and this computer's cursor going over to the phone at the right edge, moving
-the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
+seen on the computer, the phone browsing this computer's files (refused while off) and
+downloading one, a screenshot taken here reaching the phone, and this computer's cursor going over
+to the phone at the right edge, moving the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
 link closing on a `DevicePlugin` NullPointerException (phone), flat avatars taken for app glyphs
 (desktop).
 
