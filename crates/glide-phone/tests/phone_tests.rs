@@ -1733,3 +1733,34 @@ async fn files_can_be_shared_over_dbus() {
     assert_eq!(packet.payload_size, Some(5));
     let _ = std::fs::remove_file(&file);
 }
+
+/// Glide only: the computer asks for the phone's volumes, shows them, and sets them.
+#[test]
+fn the_computer_sets_the_phones_own_volumes() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    manager.remember_volume_receiver("pinned", true);
+    let mut drain = || std::iter::from_fn(|| sent.try_recv().ok()).collect::<Vec<_>>();
+    drain();
+    manager.greet("pinned");
+    assert!(
+        drain().iter().any(|p| p.packet_type == "kdeconnect.systemvolume.request" && p.body["requestSinks"] == true),
+        "the greeting asks for the phone's volumes"
+    );
+    let list = NetworkPacket::new(
+        "kdeconnect.systemvolume",
+        json!({ "sinkList": [{ "name": "phone.media", "description": "Медіа", "volume": 30, "maxVolume": 100, "muted": false }] }),
+    );
+    manager.handle_packet("pinned", &list).expect("handled");
+    assert_eq!(manager.phone_volumes["pinned"][0].volume, 30);
+    manager.set_phone_volume("pinned", "phone.media", 80).expect("set");
+    manager.set_phone_muted("pinned", "phone.media", true).expect("mute");
+    let out = drain();
+    assert_eq!(out[0].body, json!({ "name": "phone.media", "volume": 80 }));
+    assert_eq!(out[1].body, json!({ "name": "phone.media", "muted": true }));
+    assert!(manager.set_phone_volume("pinned", "phone.unknown", 1).is_err());
+}

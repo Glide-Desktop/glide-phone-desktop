@@ -94,6 +94,7 @@ pub struct State {
     pub commands: Vec<crate::panels::CommandRow>,
     pub setup_requested: bool,
     pub phone_media: crate::panels::PhoneMedia,
+    pub phone_volumes: crate::panels::PhoneVolumes,
     pub sms: std::collections::HashMap<String, crate::plugins::sms::Inbox>,
 }
 
@@ -119,6 +120,11 @@ fn snapshot() -> Snapshot {
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default(),
             sms: proxy.list_sms_json().ok().and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default(),
+            phone_volumes: proxy
+                .list_phone_volumes_json()
+                .ok()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default(),
         });
     }
     let mut guard = global_manager()?.try_lock().ok()?;
@@ -129,6 +135,7 @@ fn snapshot() -> Snapshot {
         commands: crate::panels::command_rows(&guard.commands.entries),
         setup_requested,
         phone_media: guard.phone_media.clone(),
+        phone_volumes: guard.phone_volumes.clone(),
         sms: guard.sms.clone(),
     })
 }
@@ -169,6 +176,7 @@ impl PhoneApp {
             self.ringing_local = state.ringing;
             self.panels.commands = state.commands;
             self.panels.phone_media = state.phone_media;
+            self.panels.phone_volumes = state.phone_volumes;
             self.panels.sms = state.sms;
             self.panels.device_names = self.devices.iter().map(|d| (d.id.clone(), d.name.clone())).collect();
             self.panels.reachable = self

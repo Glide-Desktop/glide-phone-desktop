@@ -100,6 +100,10 @@ pub struct PhoneManager {
     pub sms: HashMap<String, crate::plugins::sms::Inbox>,
     /// The phones' media players, by device.
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
+    /// The phones' own volumes (Glide only), by device.
+    pub phone_volumes: HashMap<String, Vec<crate::plugins::phone_volume::PhoneSink>>,
+    /// Phones whose volume this computer may set (their identity accepts systemvolume.request).
+    volume_receivers: std::collections::HashSet<String>,
     /// Set when a phone asked to set commands up here; the window opens that section.
     pub commands_setup_requested: bool,
     pub notify: Arc<Notify>,
@@ -155,6 +159,8 @@ impl PhoneManager {
             commands: crate::plugins::runcommand::Commands::load(commands_path),
             commands_setup_requested: false,
             phone_media: HashMap::new(),
+            phone_volumes: HashMap::new(),
+            volume_receivers: std::collections::HashSet::new(),
             sms: HashMap::new(),
             last_addresses: HashMap::new(),
             browse_requested: HashMap::new(),
@@ -269,6 +275,45 @@ impl PhoneManager {
     }
 
     /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
+    /// Remembers whether this computer may set a phone's volumes (its identity says so).
+    pub fn remember_volume_receiver(&mut self, device_id: &str, accepts: bool) {
+        if accepts {
+            self.volume_receivers.insert(device_id.to_string());
+        } else {
+            self.volume_receivers.remove(device_id);
+        }
+    }
+
+    /// Sets one of the phone's volumes (0..=its maximum).
+    pub fn set_phone_volume(
+        &mut self, device_id: &str, name: &str, volume: i64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        let sink = self
+            .phone_volumes
+            .get_mut(device_id)
+            .and_then(|sinks| sinks.iter_mut().find(|s| s.name == name))
+            .ok_or("the phone has no such volume")?;
+        sink.volume = volume.clamp(0, sink.max_volume);
+        let packet = crate::plugins::phone_volume::volume_packet(name, sink.volume);
+        self.send_to_device(device_id, packet);
+        Ok(())
+    }
+
+    pub fn set_phone_muted(
+        &mut self, device_id: &str, name: &str, muted: bool,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        let sink = self
+            .phone_volumes
+            .get_mut(device_id)
+            .and_then(|sinks| sinks.iter_mut().find(|s| s.name == name))
+            .ok_or("the phone has no such volume")?;
+        sink.muted = muted;
+        self.send_to_device(device_id, crate::plugins::phone_volume::mute_packet(name, muted));
+        Ok(())
+    }
+
     /// Remembers whether a phone takes the cursor at a screen edge (its identity says so).
     pub fn remember_input_receiver(&mut self, device_id: &str, accepts: bool) {
         if accepts {
@@ -454,6 +499,9 @@ impl PhoneManager {
         for packet in self.greeting() {
             self.send_to_device(device_id, packet);
         }
+        if self.volume_receivers.contains(device_id) {
+            self.send_to_device(device_id, crate::plugins::phone_volume::request_packet());
+        }
         if let Some(sender) = self.senders.get(device_id) {
             Self::greet_async(sender.clone());
         }
@@ -596,6 +644,7 @@ impl PhoneManager {
         self.senders.remove(device_id);
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
+        self.phone_volumes.remove(device_id);
         if self.share_input.target.as_deref() == Some(device_id) {
             self.end_share_input(); // a phone that went away can't give the cursor back
         }
@@ -957,6 +1006,15 @@ impl PhoneManager {
             }
             crate::plugins::telephony::PACKET_TYPE_TELEPHONY => {
                 self.handle_call(device_id, device_name, packet);
+                true
+            }
+            crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME
+                if crate::plugins::phone_volume::is_phone_list(packet) =>
+            {
+                if let Some(sinks) = crate::plugins::phone_volume::parse(&packet.body) {
+                    self.phone_volumes.insert(device_id.to_string(), sinks);
+                    self.notify.notify_waiters();
+                }
                 true
             }
             crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST => {

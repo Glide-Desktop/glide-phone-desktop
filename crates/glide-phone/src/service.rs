@@ -125,6 +125,7 @@ impl PhoneService {
                 "kdeconnect.mousepad.keyboardstate".to_string(),
                 "kdeconnect.share.request.update".to_string(),
                 "kdeconnect.shareinputdevices".to_string(),
+                "kdeconnect.systemvolume".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -154,6 +155,7 @@ impl PhoneService {
                 "kdeconnect.share.request".to_string(),
                 "kdeconnect.mousepad.request".to_string(),
                 "kdeconnect.shareinputdevices.request".to_string(),
+                "kdeconnect.systemvolume.request".to_string(),
             ],
         }
     }
@@ -336,6 +338,11 @@ impl PhoneService {
         let takes_cursor =
             identity.incoming_capabilities.iter().any(|c| c == crate::edge::PACKET_TYPE_SHAREINPUTDEVICES_REQUEST);
         mgr.remember_input_receiver(&identity.device_id, takes_cursor);
+        let takes_volume = identity
+            .incoming_capabilities
+            .iter()
+            .any(|c| c == crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST);
+        mgr.remember_volume_receiver(&identity.device_id, takes_volume);
         mgr.send_pending_pair_request(&identity.device_id);
         let device = mgr.devices.get(&identity.device_id)?;
         Some((device.pair_state == PairState::Paired, device.name.clone()))

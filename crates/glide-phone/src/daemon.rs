@@ -130,6 +130,19 @@ impl PhoneDaemon {
     }
 
     /// The phones' media players: `{device id: {player: state}}`.
+    /// The phones' own volumes (Glide only): `{device id: [sinks]}`.
+    pub async fn list_phone_volumes_json(&self) -> String {
+        serde_json::to_string(&self.manager.lock().await.phone_volumes).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub async fn set_phone_volume(&self, device_id: &str, name: &str, volume: i32) -> bool {
+        self.manager.lock().await.set_phone_volume(device_id, name, i64::from(volume)).is_ok()
+    }
+
+    pub async fn set_phone_muted(&self, device_id: &str, name: &str, muted: bool) -> bool {
+        self.manager.lock().await.set_phone_muted(device_id, name, muted).is_ok()
+    }
+
     pub async fn list_phone_media_json(&self) -> String {
         serde_json::to_string(&self.manager.lock().await.phone_media).unwrap_or_else(|_| "{}".to_string())
     }

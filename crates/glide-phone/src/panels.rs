@@ -10,12 +10,14 @@ use crate::plugins::runcommand::Command;
 use crate::ui::{Message, global_manager, proxy};
 
 pub type PhoneMedia = std::collections::HashMap<String, BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>;
+pub type PhoneVolumes = std::collections::HashMap<String, Vec<crate::plugins::phone_volume::PhoneSink>>;
 
 /// State of the feature sections.
 #[derive(Debug, Default)]
 pub struct Panels {
     pub commands: Vec<CommandRow>,
     pub phone_media: PhoneMedia,
+    pub phone_volumes: PhoneVolumes,
     pub device_names: std::collections::HashMap<String, String>,
     /// Paired phones that are connected now.
     pub reachable: Vec<String>,
@@ -66,6 +68,9 @@ pub enum PanelMessage {
     SendSms,
     /// Off → left → right → top → bottom → off.
     CycleShareEdge,
+    /// (device, stream, volume 0..=max) — the phone's own volume (Glide only).
+    PhoneVolume(String, String, f32),
+    PhoneMute(String, String, bool),
 }
 
 impl Panels {
@@ -197,6 +202,38 @@ impl Panels {
             PanelMessage::CloseThread => self.open_thread = None,
             PanelMessage::SmsDraft(text) => self.sms_draft = text,
             PanelMessage::SendSms => self.send_sms(),
+            PanelMessage::PhoneVolume(device, name, value) => {
+                #[allow(clippy::cast_possible_truncation)]
+                let volume = value.round() as i64;
+                let sink = self.phone_volumes.get_mut(&device).and_then(|s| s.iter_mut().find(|s| s.name == name));
+                // Only whole steps go to the phone, not every pixel of a drag.
+                if let Some(sink) = sink
+                    && sink.volume != volume
+                {
+                    sink.volume = volume;
+                    if let Some(proxy) = proxy() {
+                        let _ = proxy.set_phone_volume(&device, &name, i32::try_from(volume).unwrap_or(0));
+                    } else if let Some(manager) = global_manager()
+                        && let Ok(mut guard) = manager.try_lock()
+                    {
+                        let _ = guard.set_phone_volume(&device, &name, volume);
+                    }
+                }
+            }
+            PanelMessage::PhoneMute(device, name, muted) => {
+                if let Some(sink) =
+                    self.phone_volumes.get_mut(&device).and_then(|s| s.iter_mut().find(|s| s.name == name))
+                {
+                    sink.muted = muted;
+                }
+                if let Some(proxy) = proxy() {
+                    let _ = proxy.set_phone_muted(&device, &name, muted);
+                } else if let Some(manager) = global_manager()
+                    && let Ok(mut guard) = manager.try_lock()
+                {
+                    let _ = guard.set_phone_muted(&device, &name, muted);
+                }
+            }
             PanelMessage::PhoneMedia(device, player, action) => {
                 if let Some(proxy) = proxy() {
                     let _ = proxy.phone_media_action(&device, &player, action);
@@ -215,6 +252,9 @@ impl Panels {
     #[must_use]
     pub fn view<'a>(&'a self, shell: &'a Shell<Message>) -> Vec<Element<'a, Message>> {
         let mut sections = Vec::new();
+        if self.phone_volumes.values().any(|sinks| !sinks.is_empty()) {
+            sections.push(phone_volume_group(self, shell));
+        }
         if self.phone_media.values().any(|players| !players.is_empty()) {
             sections.push(phone_media_group(self, shell));
         }
@@ -389,6 +429,36 @@ fn commands_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<
 }
 
 /// Players running on the phone, with their controls (KDE Connect's media remote).
+/// The phone's own volumes, set from here (Glide only).
+fn phone_volume_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    let paint = shell.paint();
+    let mut group = widget::Group::new(paint).title(shell.t("Гучність телефону", "Phone volume"));
+    for (device, sinks) in &panels.phone_volumes {
+        for sink in sinks {
+            #[allow(clippy::cast_precision_loss)]
+            let (value, max) = (sink.volume as f32, sink.max_volume as f32);
+            let (dev, name) = (device.clone(), sink.name.clone());
+            let slider = widget::slider(paint, 0.0..=max, value, move |v| {
+                Message::Panel(PanelMessage::PhoneVolume(dev.clone(), name.clone(), v))
+            });
+            let mute = widget::compact_button(
+                paint,
+                if sink.muted { "🔇" } else { "🔊" },
+                Tone::Neutral,
+                Some(Message::Panel(PanelMessage::PhoneMute(device.clone(), sink.name.clone(), !sink.muted))),
+            );
+            let label = if sink.description.is_empty() { sink.name.clone() } else { sink.description.clone() };
+            group = group.push(
+                widget::ListRow::new(paint, label)
+                    .subtitle(format!("{}%", sink.volume * 100 / sink.max_volume.max(1)))
+                    .suffix(mute),
+            );
+            group = group.push(slider);
+        }
+    }
+    group.into()
+}
+
 fn phone_media_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
     let paint = shell.paint();
     let mut group = widget::Group::new(paint).title(shell.t("Медіа на телефоні", "Media on the phone"));

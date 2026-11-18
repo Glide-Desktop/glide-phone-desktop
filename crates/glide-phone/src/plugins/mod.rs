@@ -7,6 +7,7 @@ pub mod find_device;
 pub mod mousepad;
 pub mod mpris;
 pub mod notifications;
+pub mod phone_volume;
 pub mod presenter;
 pub mod remote_media;
 pub mod runcommand;
