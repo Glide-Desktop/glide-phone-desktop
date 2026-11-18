@@ -78,6 +78,11 @@ pub fn is_silhouette_bgra(bgra: &[u8]) -> bool {
     if visible == 0 || opaque == 0 {
         return true;
     }
+    // An app glyph is a shape on a transparent background; a picture that fills (almost) the
+    // whole square, even a flat-coloured avatar, is never one.
+    if visible * 100 >= total_pixels * 90 {
+        return false;
+    }
 
     let avg_r = (r_sum / (opaque as u64)) as i32;
     let avg_g = (g_sum / (opaque as u64)) as i32;

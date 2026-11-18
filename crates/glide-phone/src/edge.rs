@@ -734,6 +734,24 @@ mod tests {
         assert!(rx.try_recv().is_err(), "after the release the cursor is this computer's again");
     }
 
+    /// Moves the real cursor with a virtual mouse: `GLIDE_NUDGE="dx,dy,steps"` (for scripts).
+    #[test]
+    #[ignore = "moves the real cursor; run by hand"]
+    fn nudge_cursor() {
+        use crate::input::{Action, RemoteInput};
+        let spec = std::env::var("GLIDE_NUDGE").unwrap_or_else(|_| "0,0,0".into());
+        let v: Vec<i32> = spec.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        let [dx, dy, steps] = v[..] else { panic!("GLIDE_NUDGE=dx,dy,steps") };
+        let mouse = RemoteInput::start();
+        mouse.send(vec![Action::Move(0, 0)]);
+        std::thread::sleep(std::time::Duration::from_millis(1500)); // the compositor picks it up
+        for _ in 0..steps {
+            mouse.send(vec![Action::Move(dx, dy)]);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
     #[test]
     fn crossing_the_edge_tells_the_phone_where_to_enter() {
         let packets = Translator::default().packets(&Captured::Entered { along: 300 }, Edge::Left);

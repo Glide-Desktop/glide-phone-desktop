@@ -263,6 +263,12 @@ fn silhouette_payload_is_not_treated_as_avatar_and_avatar_packet_upgrades_summar
     assert!(!is_silhouette_bgra(&avatar_bgra));
     let avatar_png = glide_desktop::image::Image::from_bgra(96, 96, avatar_bgra).unwrap().png().unwrap();
     assert!(payload_is_rich_avatar(Some(&avatar_png)));
+    // A flat-coloured avatar filling the square (letter-less placeholder, solid photo) is an
+    // avatar too, not an app glyph; seen live with a real phone.
+    let mut flat_bgra = vec![0u8; 96 * 96 * 4];
+    Painter::fill_rounded_rect_over(&mut flat_bgra, 96, 96, 0, 0, 96, 96, 1, Color([0.9, 0.08, 0.12, 1.0]), 0.0);
+    let flat_png = glide_desktop::image::Image::from_bgra(96, 96, flat_bgra).unwrap().png().unwrap();
+    assert!(payload_is_rich_avatar(Some(&flat_png)));
 
     let mut active = HashMap::new();
     let mut history = HashMap::new();

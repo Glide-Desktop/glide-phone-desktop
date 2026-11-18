@@ -366,6 +366,7 @@ impl PhoneManager {
                 }
                 return;
             };
+            tracing::info!(%target, along, "the cursor went over to the phone");
             self.share_input.target = Some(target);
         }
         if matches!(event, crate::edge::Captured::TakenBack) {
@@ -390,6 +391,7 @@ impl PhoneManager {
             "releaseDeltax"
         };
         let along = body.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+        tracing::info!(%device_id, along, "the phone gave the cursor back");
         if let Some(capture) = &self.share_input.capture {
             capture.release(i32::try_from(along.clamp(0, 100_000)).unwrap_or(0));
         }
