@@ -5,30 +5,34 @@ with KDE Connect Android**; the **Glide Phone app pairs only with Glide desktops
 announce `glideProtocol` in their identity). Glide-only packets are prefixed `glide.` and are
 ignored by KDE Connect.
 
-| Feature | Phone → computer | Computer → phone | Packets |
-|---|---|---|---|
-| Pairing, TLS, discovery (UDP, mDNS on phone, custom hosts) | ✓ | ✓ | `kdeconnect.identity`, `kdeconnect.pair` |
-| Battery | ✓ phone level, low warning | ✓ computer level on every change | `kdeconnect.battery` |
-| Clipboard (+ newest wins on connect) | ✓ | ✓ automatic with `wl-paste --watch` (needs data-control); on Glide the window's Clipboard button | `kdeconnect.clipboard(.connect)` |
-| Notifications (actions, replies, icons/avatars) | ✓ phone → desktop popups | ✓ desktop → phone (D-Bus monitor) | `kdeconnect.notification*` |
-| Find my device | ✓ ring the computer | ✓ ring the phone | `kdeconnect.findmyphone.request` |
-| Ping | ✓ | ✓ | `kdeconnect.ping` |
-| Share files / text / links (batches, cancel) | ✓ | ✓ (payload server, file picker) | `kdeconnect.share.request(.update)` |
-| Presenter (pointer, slides, volume keys) | ✓ | — (phone is the remote) | `kdeconnect.presenter`, `mousepad.request` |
-| Mouse & keyboard | ✓ phone drives the computer (`/dev/uinput`; text via the Wayland virtual keyboard where offered, else key codes / paste) | ✓ computer drives the phone (accessibility + IME) | `kdeconnect.mousepad.*` |
-| Drawing tablet | ✓ phone pen → virtual tablet | — | `kdeconnect.digitizer(.session)` |
-| Run commands (+ live output, widget, device controls) | ✓ phone runs computer commands | — | `kdeconnect.runcommand*` |
-| Media control | ✓ phone controls computer players (MPRIS) | ✓ computer controls phone players (exported as MPRIS) | `kdeconnect.mpris(.request)` |
-| System volume | ✓ phone sets computer outputs (`pactl`) | — | `kdeconnect.systemvolume(.request)` |
-| Phone files (SFTP) | — | ✓ computer browses the phone (`sshfs` / `sftp://`) | `kdeconnect.sftp(.request)` |
-| Telephony (calls, mute, pause media) | ✓ | ✓ mute from the notification | `kdeconnect.telephony*` |
-| Connectivity (signal per SIM) | ✓ | — | `kdeconnect.connectivity_report` |
-| Contacts | ✓ synced to `~/.local/share/kpeoplevcard` | — | `kdeconnect.contacts.*` |
-| SMS (no MMS) | ✓ conversations in the window (new ones arrive as the SMS app's notification) | ✓ reply / send from the computer | `kdeconnect.sms.*` |
-| Share input devices (cursor across the screen edge) | ✓ phone takes the cursor, hands it back at its edge | ✓ the cursor and keyboard go over at the chosen edge (layer-shell strip + pointer lock, no portal needed; Ctrl+Alt+Esc takes it back) | `kdeconnect.shareinputdevices*`, `mousepad.request` |
-| **Wake-on-LAN** (Glide only) | ✓ wake a sleeping computer | ✓ computer sends its MACs | `glide.wol` |
-| **Screenshot sync** (Glide only) | ✓ new screenshots go to the computer | — | `kdeconnect.share.request` |
-| **Charge alerts** (Glide only) | ✓ "laptop low / charged" on the phone | ✓ "phone charged" on the computer | `kdeconnect.battery` |
+Every feature below is implemented in **both** apps: each one does its own end of it. "Both
+ways" means it also works in either direction; where a feature has one direction, the last
+column says why the other doesn't exist (in KDE Connect either).
+
+| Feature | Glide Phone app | glide-phone-desktop | Works | Packets |
+|---|---|---|---|---|
+| Pairing, TLS, discovery (UDP, mDNS on phone, custom hosts) | ✓ | ✓ | both ways | `kdeconnect.identity`, `kdeconnect.pair` |
+| Battery (+ low warning) | ✓ sends its level, shows the computer's | ✓ sends its level on every change, shows the phone's | both ways | `kdeconnect.battery` |
+| **Charge alerts** (Glide only) | ✓ "computer low / charged" | ✓ "phone charged" | both ways | `kdeconnect.battery` |
+| Clipboard (+ newest wins on connect) | ✓ | ✓ automatic with `wl-paste --watch` (needs data-control); on Glide the window's Clipboard button | both ways | `kdeconnect.clipboard(.connect)` |
+| Notifications (actions, replies, contact pictures) | ✓ sends and shows | ✓ sends (D-Bus monitor) and shows | both ways | `kdeconnect.notification*` |
+| Find my device | ✓ | ✓ | both ways | `kdeconnect.findmyphone.request` |
+| Ping | ✓ | ✓ | both ways | `kdeconnect.ping` |
+| Share files / text / links (batches, cancel) | ✓ | ✓ (payload server, file picker) | both ways | `kdeconnect.share.request(.update)` |
+| Media control | ✓ controls the computer's players, exports its own | ✓ controls the phone's players (as MPRIS), exports its own | both ways | `kdeconnect.mpris(.request)` |
+| Volume | ✓ sets the computer's outputs; **offers its own streams** (Glide only) | ✓ offers its outputs (`pactl`); **sets the phone's media / ringer / notification / alarm volume** (Glide only) | both ways | `kdeconnect.systemvolume(.request)` |
+| Mouse & keyboard | ✓ drives the computer (touchpad, keys, typing); takes the computer's input (accessibility + IME) | ✓ takes the phone's input (`/dev/uinput`, Wayland virtual keyboard where offered); drives the phone from the window | both ways | `kdeconnect.mousepad.*` |
+| Share input devices (cursor across the screen edge) | ✓ takes the cursor, hands it back at its edge | ✓ the cursor and keyboard go over at the chosen edge (layer-shell strip + pointer lock; Ctrl+Alt+Esc takes it back) | computer → phone: the phone has no mouse to send over (it drives the computer as a touchpad instead) | `kdeconnect.shareinputdevices*` |
+| Presenter (pointer, slides, volume keys) | ✓ the remote | ✓ moves slides / shows the pointer | phone → computer: the phone is the hand-held remote | `kdeconnect.presenter` |
+| Drawing tablet | ✓ the pen surface | ✓ virtual tablet | phone → computer: the touchscreen is the pen surface | `kdeconnect.digitizer(.session)` |
+| Run commands (+ live output, widget, device controls) | ✓ lists and runs, shows output | ✓ keeps commands, runs them, streams output | phone → computer: Android has no shell commands to run | `kdeconnect.runcommand*` |
+| Telephony (calls, mute, pause media) | ✓ reports calls, mutes on request | ✓ shows calls, mutes the ringer, pauses media | both ends; calls only happen on the phone | `kdeconnect.telephony*` |
+| Connectivity (signal per SIM) | ✓ reports | ✓ shows | phone → computer: the computer has no SIM | `kdeconnect.connectivity_report` |
+| Contacts | ✓ sends its address book | ✓ keeps it (`~/.local/share/kpeoplevcard`), names callers and SMS | phone → computer: the address book lives on the phone | `kdeconnect.contacts.*` |
+| SMS (no MMS) | ✓ serves conversations, sends | ✓ shows conversations, replies, writes new | both ends; SMS only exist on the phone | `kdeconnect.sms.*` |
+| Phone files (SFTP) | ✓ serves its storage | ✓ browses it (`sshfs` / `sftp://`) | computer → phone files: Share sends the computer's files to the phone | `kdeconnect.sftp(.request)` |
+| **Wake-on-LAN** (Glide only) | ✓ wakes a sleeping computer | ✓ tells the phone its MACs | phone → computer: phones can't be woken over the network | `glide.wol` |
+| **Screenshot sync** (Glide only) | ✓ sends new screenshots | ✓ receives them (Share) | phone → computer (opt-in) | `kdeconnect.share.request` |
 
 ## Not done
 
@@ -58,8 +62,9 @@ media players, album art, downloads and dials before pairing are all bounded.
 **Live, the real Glide Phone app ↔ this daemon** (`scripts/real-app-live-test.sh` in the phone
 repo; fresh install on an emulator, private D-Bus session): pairing from the app's onboarding with
 the code confirmed on both sides, a battery change, a contact's picture arriving as the
-notification icon (not the app's), and this computer's cursor going over to the phone at the right
-edge, moving the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
+notification icon (not the app's), the phone's volume set from the computer and its volume button
+seen on the computer, and this computer's cursor going over to the phone at the right edge, moving
+the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
 link closing on a `DevicePlugin` NullPointerException (phone), flat avatars taken for app glyphs
 (desktop).
 
