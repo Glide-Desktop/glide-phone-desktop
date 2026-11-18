@@ -734,6 +734,19 @@ mod tests {
         assert!(rx.try_recv().is_err(), "after the release the cursor is this computer's again");
     }
 
+    /// Taps one key on a virtual keyboard: `GLIDE_KEY=<linux key code>` (1 = Escape).
+    #[test]
+    #[ignore = "presses a real key; run by hand"]
+    fn tap_key() {
+        use crate::input::{Action, RemoteInput};
+        let code: u16 = std::env::var("GLIDE_KEY").ok().and_then(|k| k.parse().ok()).expect("GLIDE_KEY");
+        let keyboard = RemoteInput::start();
+        keyboard.send(vec![Action::Move(0, 0)]);
+        std::thread::sleep(std::time::Duration::from_millis(1500)); // the compositor picks it up
+        keyboard.send(vec![Action::Tap { code, modifiers: [None; 4] }]);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
     /// Moves the real cursor with a virtual mouse: `GLIDE_NUDGE="dx,dy,steps"` (for scripts).
     #[test]
     #[ignore = "moves the real cursor; run by hand"]

@@ -340,6 +340,9 @@ impl PhoneManager {
         self.share_input.capture = crate::edge::EdgeCapture::start(edge, move |event| {
             let _ = events.send(event);
         });
+        if self.share_input.capture.is_some() {
+            tracing::info!(edge = edge.name(), "the cursor strip is on the screen edge");
+        }
         if self.share_input.capture.is_none() {
             tracing::warn!(
                 "cannot put the cursor strip on the screen edge (needs layer-shell and pointer constraints)"
