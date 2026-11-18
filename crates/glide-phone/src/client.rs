@@ -19,6 +19,8 @@ pub trait PhoneDaemon {
     fn take_commands_setup(&self) -> zbus::Result<bool>;
     fn list_phone_media_json(&self) -> zbus::Result<String>;
     fn list_phone_volumes_json(&self) -> zbus::Result<String>;
+    fn computer_files_allowed(&self) -> zbus::Result<bool>;
+    fn set_computer_files_allowed(&self, allowed: bool) -> zbus::Result<bool>;
     fn set_phone_volume(&self, device_id: &str, name: &str, volume: i32) -> zbus::Result<bool>;
     fn set_phone_muted(&self, device_id: &str, name: &str, muted: bool) -> zbus::Result<bool>;
     fn phone_media_action(&self, device_id: &str, player: &str, action: &str) -> zbus::Result<bool>;

@@ -102,6 +102,9 @@ pub struct PhoneManager {
     pub phone_media: HashMap<String, std::collections::BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>,
     /// The phones' own volumes (Glide only), by device.
     pub phone_volumes: HashMap<String, Vec<crate::plugins::phone_volume::PhoneSink>>,
+    /// Whether paired phones may browse this computer's home folder (off by default).
+    files_allowed: bool,
+    files_allowed_path: Option<std::path::PathBuf>,
     /// Phones whose volume this computer may set (their identity accepts systemvolume.request).
     volume_receivers: std::collections::HashSet<String>,
     /// Set when a phone asked to set commands up here; the window opens that section.
@@ -120,6 +123,7 @@ impl PhoneManager {
             pinned
         });
         let commands_path = config.config_path.as_ref().map(|path| path.with_file_name("phone-commands.json"));
+        let files_allowed_path = config.config_path.as_ref().map(|p| p.with_file_name("phone-may-browse-files"));
         let share_input = {
             let path = config.config_path.as_ref().map(|p| p.with_file_name("share-input-edge"));
             let edge = path
@@ -161,6 +165,11 @@ impl PhoneManager {
             phone_media: HashMap::new(),
             phone_volumes: HashMap::new(),
             volume_receivers: std::collections::HashSet::new(),
+            files_allowed: files_allowed_path
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .is_some_and(|t| t.trim() == "yes"),
+            files_allowed_path,
             sms: HashMap::new(),
             last_addresses: HashMap::new(),
             browse_requested: HashMap::new(),
@@ -275,6 +284,42 @@ impl PhoneManager {
     }
 
     /// Lets phones drive this computer's pointer and keyboard when `/dev/uinput` is usable.
+    /// Whether paired phones may browse this computer's home folder.
+    #[must_use]
+    pub fn computer_files_allowed(&self) -> bool {
+        self.files_allowed
+    }
+
+    pub fn set_computer_files_allowed(&mut self, allowed: bool) {
+        self.files_allowed = allowed;
+        if let Some(path) = &self.files_allowed_path {
+            let _ = glide_config::write_atomic(path, if allowed { b"yes" } else { b"no" }, 0o600);
+        }
+        self.notify.notify_waiters();
+    }
+
+    /// A phone's `glide.files.request`: a folder listing, or the file sent like a share.
+    fn handle_files_request(&mut self, device_id: &str, body: &serde_json::Value) {
+        use crate::plugins::computer_files;
+        let path = body.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+        let Some(root) = computer_files::root().filter(|_| self.files_allowed) else {
+            self.send_to_device(device_id, computer_files::error_packet(&path, "off"));
+            return;
+        };
+        if body.get("fetch").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            match computer_files::resolve(&root, &path).filter(|p| p.is_file()) {
+                Some(file) => {
+                    if self.share_files(device_id, vec![file]).is_err() {
+                        self.send_to_device(device_id, computer_files::error_packet(&path, "unreadable"));
+                    }
+                }
+                None => self.send_to_device(device_id, computer_files::error_packet(&path, "missing")),
+            }
+        } else {
+            self.send_to_device(device_id, computer_files::listing(&root, &path));
+        }
+    }
+
     /// Remembers whether this computer may set a phone's volumes (its identity says so).
     pub fn remember_volume_receiver(&mut self, device_id: &str, accepts: bool) {
         if accepts {
@@ -897,6 +942,11 @@ impl PhoneManager {
     /// Drawing tablet, keyboard state and share batch updates.
     fn handle_input_packet(&mut self, device_id: &str, packet: &NetworkPacket) -> bool {
         match packet.packet_type.as_str() {
+            crate::plugins::computer_files::PACKET_TYPE_FILES_REQUEST => {
+                let body = packet.body.clone();
+                self.handle_files_request(device_id, &body);
+                true
+            }
             crate::edge::PACKET_TYPE_SHAREINPUTDEVICES => {
                 self.on_input_returned(device_id, &packet.body);
                 true

@@ -1,5 +1,6 @@
 pub mod battery;
 pub mod clipboard;
+pub mod computer_files;
 pub mod connectivity;
 pub mod contacts;
 pub mod digitizer;

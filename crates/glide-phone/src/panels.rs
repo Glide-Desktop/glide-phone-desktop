@@ -38,6 +38,8 @@ pub struct Panels {
     pub draft_command: String,
     /// Where the cursor goes over to the phone ("" = off); read from the daemon once.
     pub share_edge: Option<String>,
+    /// Whether phones may browse this computer's files; read from the daemon once.
+    pub files_allowed: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +70,8 @@ pub enum PanelMessage {
     SendSms,
     /// Off → left → right → top → bottom → off.
     CycleShareEdge,
+    /// Let phones browse this computer's home folder, or stop it.
+    ToggleComputerFiles,
     /// (device, stream, volume 0..=max) — the phone's own volume (Glide only).
     PhoneVolume(String, String, f32),
     PhoneMute(String, String, bool),
@@ -138,23 +142,8 @@ impl Panels {
                     glide_sdk::iced::clipboard::read().map(|text| Message::Panel(PanelMessage::ClipboardRead(text)))
                 );
             }
-            PanelMessage::CycleShareEdge => {
-                let current = self.share_edge.clone().unwrap_or_default();
-                let order = ["", "left", "right", "top", "bottom"];
-                let next = order[(order.iter().position(|e| *e == current).unwrap_or(0) + 1) % order.len()];
-                let ok = if let Some(proxy) = proxy() {
-                    proxy.set_share_input_edge(next).unwrap_or(false)
-                } else if let Some(manager) = global_manager()
-                    && let Ok(mut guard) = manager.try_lock()
-                {
-                    guard.set_share_input_edge(crate::edge::Edge::parse(next))
-                } else {
-                    false
-                };
-                if ok {
-                    self.share_edge = Some(next.to_string());
-                }
-            }
+            PanelMessage::CycleShareEdge => self.cycle_share_edge(),
+            PanelMessage::ToggleComputerFiles => self.toggle_computer_files(),
             PanelMessage::ClipboardRead(text) => {
                 if let (Some(text), Some(device)) = (text.filter(|t| !t.is_empty()), self.reachable.first()) {
                     if let Some(proxy) = proxy() {
@@ -169,6 +158,41 @@ impl Panels {
             other => return Err(other),
         }
         Ok(Task::none())
+    }
+
+    fn cycle_share_edge(&mut self) {
+        let current = self.share_edge.clone().unwrap_or_default();
+        let order = ["", "left", "right", "top", "bottom"];
+        let next = order[(order.iter().position(|e| *e == current).unwrap_or(0) + 1) % order.len()];
+        let ok = if let Some(proxy) = proxy() {
+            proxy.set_share_input_edge(next).unwrap_or(false)
+        } else if let Some(manager) = global_manager()
+            && let Ok(mut guard) = manager.try_lock()
+        {
+            guard.set_share_input_edge(crate::edge::Edge::parse(next))
+        } else {
+            false
+        };
+        if ok {
+            self.share_edge = Some(next.to_string());
+        }
+    }
+
+    fn toggle_computer_files(&mut self) {
+        let next = !self.files_allowed.unwrap_or(false);
+        let ok = if let Some(proxy) = proxy() {
+            proxy.set_computer_files_allowed(next).unwrap_or(false)
+        } else if let Some(manager) = global_manager()
+            && let Ok(mut guard) = manager.try_lock()
+        {
+            guard.set_computer_files_allowed(next);
+            true
+        } else {
+            false
+        };
+        if ok {
+            self.files_allowed = Some(next);
+        }
     }
 
     pub fn update(&mut self, message: PanelMessage) -> Task<Message> {
@@ -272,6 +296,13 @@ impl Panels {
 impl Panels {
     /// After each refresh: load names and, once per phone, ask for its conversations.
     pub fn refreshed(&mut self) {
+        if self.files_allowed.is_none() {
+            self.files_allowed = Some(if let Some(proxy) = proxy() {
+                proxy.computer_files_allowed().unwrap_or(false)
+            } else {
+                global_manager().and_then(|m| m.try_lock().ok()).is_some_and(|g| g.computer_files_allowed())
+            });
+        }
         if self.share_edge.is_none() {
             self.share_edge = Some(if let Some(proxy) = proxy() {
                 proxy.share_input_edge().unwrap_or_default()
@@ -571,6 +602,18 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
     ]
     .spacing(8)
     .align_y(glide_sdk::iced::Alignment::Center);
+    // The phone may browse this computer's home folder (hidden files never).
+    let files_label = if panels.files_allowed.unwrap_or(false) {
+        shell.t("Файли комп’ютера на телефоні: увімкнено", "This computer's files on the phone: on")
+    } else {
+        shell.t("Файли комп’ютера на телефоні: вимкнено", "This computer's files on the phone: off")
+    };
+    let files = widget::compact_button(
+        paint,
+        files_label,
+        Tone::Neutral,
+        Some(Message::Panel(PanelMessage::ToggleComputerFiles)),
+    );
     let keyboard_off = panels.reachable.first().and_then(|id| panels.keyboard_off.get(id)).copied().unwrap_or(false);
     let description = if keyboard_off {
         format!("{device} · {}", shell.t("клавіатура телефону зараз недоступна", "the phone's keyboard is unavailable"))
@@ -580,7 +623,7 @@ fn control_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'
     widget::Group::new(paint)
         .title(shell.t("Керувати телефоном", "Control the phone"))
         .description(description)
-        .push(column![pad, keys, typing, share, edge].spacing(10))
+        .push(column![pad, keys, typing, share, edge, files].spacing(10))
         .into()
 }
 

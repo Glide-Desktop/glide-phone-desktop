@@ -130,6 +130,16 @@ impl PhoneDaemon {
     }
 
     /// The phones' media players: `{device id: {player: state}}`.
+    /// Whether paired phones may browse this computer's home folder (Glide only).
+    pub async fn computer_files_allowed(&self) -> bool {
+        self.manager.lock().await.computer_files_allowed()
+    }
+
+    pub async fn set_computer_files_allowed(&self, allowed: bool) -> bool {
+        self.manager.lock().await.set_computer_files_allowed(allowed);
+        true
+    }
+
     /// The phones' own volumes (Glide only): `{device id: [sinks]}`.
     pub async fn list_phone_volumes_json(&self) -> String {
         serde_json::to_string(&self.manager.lock().await.phone_volumes).unwrap_or_else(|_| "{}".to_string())

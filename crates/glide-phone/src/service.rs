@@ -126,6 +126,7 @@ impl PhoneService {
                 "kdeconnect.share.request.update".to_string(),
                 "kdeconnect.shareinputdevices".to_string(),
                 "kdeconnect.systemvolume".to_string(),
+                "glide.files.request".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -156,6 +157,7 @@ impl PhoneService {
                 "kdeconnect.mousepad.request".to_string(),
                 "kdeconnect.shareinputdevices.request".to_string(),
                 "kdeconnect.systemvolume.request".to_string(),
+                "glide.files".to_string(),
             ],
         }
     }

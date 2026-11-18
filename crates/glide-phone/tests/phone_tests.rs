@@ -1764,3 +1764,29 @@ fn the_computer_sets_the_phones_own_volumes() {
     assert_eq!(out[1].body, json!({ "name": "phone.media", "muted": true }));
     assert!(manager.set_phone_volume("pinned", "phone.unknown", 1).is_err());
 }
+
+/// Glide only: the phone may browse this computer's files only once the user allows it.
+#[test]
+fn the_phone_browses_this_computers_files_only_when_allowed() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    let mut drain = || std::iter::from_fn(|| sent.try_recv().ok()).collect::<Vec<_>>();
+    drain();
+    let ask = NetworkPacket::new("glide.files.request", json!({ "path": "" }));
+    assert!(!manager.computer_files_allowed(), "off by default");
+    manager.handle_packet("pinned", &ask).expect("handled");
+    let answer = drain().into_iter().find(|p| p.packet_type == "glide.files").expect("an answer");
+    assert_eq!(answer.body["error"], "off");
+    manager.set_computer_files_allowed(true);
+    manager.handle_packet("pinned", &ask).expect("handled");
+    let answer = drain().into_iter().find(|p| p.packet_type == "glide.files").expect("an answer");
+    assert!(answer.body.get("entries").is_some() || answer.body["error"] == "missing", "{:?}", answer.body);
+    let secret = NetworkPacket::new("glide.files.request", json!({ "path": ".ssh/id_ed25519", "fetch": true }));
+    manager.handle_packet("pinned", &secret).expect("handled");
+    let answer = drain().into_iter().find(|p| p.packet_type == "glide.files").expect("refused");
+    assert_eq!(answer.body["error"], "missing");
+}
