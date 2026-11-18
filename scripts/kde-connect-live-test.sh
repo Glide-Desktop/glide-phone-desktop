@@ -6,8 +6,8 @@
 #
 # The emulator can't receive the desktop's UDP broadcast, so the identity is sent through
 # `adb emu redir`; KDE Connect then dials the daemon at 10.0.2.2. Pairing is requested in KDE
-# Connect's UI (uiautomator) and accepted over D-Bus. Note: inbound connections into the
-# emulator are impossible, so payloads KDE Connect offers (notification icons) aren't fetched.
+# Connect's UI (uiautomator) and accepted over D-Bus. Payloads KDE Connect offers
+# (notification icons) are fetched through adb forward of ports 1739-1750 (the rest stay free for our own payloads).
 set -euo pipefail
 bin="$(realpath "${1:?glide-phone binary}")"
 apk="${2:?KDE Connect debug APK}"
@@ -18,6 +18,7 @@ pid=""
 cleanup() {
   [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   $adb emu redir del udp:17160 >/dev/null 2>&1 || true
+  $adb forward --remove-all >/dev/null 2>&1 || true
   $adb shell am force-stop "$pkg" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -68,6 +69,8 @@ field() { devices | python3 -c "import json,sys; d=json.load(sys.stdin); print(d
 echo "desktop $id on port $port"
 
 $adb emu redir add udp:17160:1716 >/dev/null
+# Let the computer reach KDE Connect's payload ports (notification icons) in the emulator.
+for p in $(seq 1739 1750); do $adb forward "tcp:$p" "tcp:$p" >/dev/null; done
 announce() { # our identity to KDE Connect; it dials back
   python3 - "$id" "$port" <<'PY'
 import json, socket, sys, time
@@ -110,6 +113,23 @@ $adb shell cmd notification post -t "Glide" glidelive "kde-to-glide" >/dev/null
 for _ in $(seq 60); do devices | grep -q kde-to-glide && break; sleep 0.5; done
 devices | grep -q kde-to-glide || { devices | cut -c1-600; fail "the notification didn't arrive"; }
 echo "notification arrived"
+# A contact's picture from KDE Connect, not the app's icon.
+avatar="$(python3 - <<'PY'
+import base64, struct, zlib
+w = h = 96
+rows = b"".join(b"\0" + b"".join(bytes(((x * 255) // w, (y * 255) // h, 160)) for x in range(w)) for y in range(h))
+c = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+print(base64.b64encode(b"\x89PNG\r\n\x1a\n" + c(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+      + c(b"IDAT", zlib.compress(rows)) + c(b"IEND", b"")).decode())
+PY
+)"
+$adb shell "cmd notification post -S messaging --conversation 'Taras' --message 'Taras:hi' -I 'data:base64,$avatar' -t 'Taras' kdeavatar 'hi'" >/dev/null
+has_avatar() { devices | python3 -c "
+import json,sys
+sys.exit(0 if any('kdeavatar' in n['id'] and n['has_avatar'] for n in json.load(sys.stdin)[0]['notifications']) else 1)"; }
+for _ in $(seq 40); do has_avatar && break; sleep 0.5; done
+has_avatar || fail "KDE Connect's notification picture didn't arrive"
+echo "notification picture (avatar) arrived"
 
 # Computer -> KDE Connect: ping and a file.
 call Ping s "$phone" >/dev/null

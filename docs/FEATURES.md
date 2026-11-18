@@ -55,12 +55,26 @@ media players, album art, downloads and dials before pairing are all bounded.
 
 ## Verified
 
+**Live, the real Glide Phone app ↔ this daemon** (`scripts/real-app-live-test.sh` in the phone
+repo; fresh install on an emulator, private D-Bus session): pairing from the app's onboarding with
+the code confirmed on both sides, a battery change, a contact's picture arriving as the
+notification icon (not the app's), and this computer's cursor going over to the phone at the right
+edge, moving the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
+link closing on a `DevicePlugin` NullPointerException (phone), flat avatars taken for app glyphs
+(desktop).
+
+**Top-bar applet**: watched on the live session bus, the real applet (the `glide` process) reads
+`ListDevicesJson` every 2 s; `the_top_bar_applet_sees_every_battery_change` parses our answers by its
+rules. The stale battery came from two daemons running at once in that session (one from autostart,
+one from D-Bus activation), which the new daemon prevents. Not shown on screen: Glide has no nested
+mode and screen capture needs the user.
+
 **Live, against the real KDE Connect Android** (1.37, built from source; `scripts/kde-connect-live-test.sh`
 in this repo, emulator ↔ this daemon in a private D-Bus session, passes repeatedly): connection over
 TLS, pairing requested by KDE Connect and accepted here (and the other way round, by hand), its
 battery and signal, its notifications, ping and a file from this computer, and KDE Connect running a
-command here. This run found and fixed the D-Bus `ShareFiles` panic. Not covered: payloads KDE
-Connect offers (notification icons), since nothing can connect into the emulator.
+command here, and KDE Connect's notification pictures (fetched through `adb forward`). This run
+found and fixed the D-Bus `ShareFiles` panic.
 
 **Live, between the two real implementations** (`scripts/live-desktop-test.sh` in the phone repo:
 emulator ↔ this daemon in a private D-Bus session): glideProtocol marker, pairing (phone asks,
