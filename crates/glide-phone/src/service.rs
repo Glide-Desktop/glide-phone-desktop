@@ -127,6 +127,7 @@ impl PhoneService {
                 "kdeconnect.shareinputdevices".to_string(),
                 "kdeconnect.systemvolume".to_string(),
                 "glide.files.request".to_string(),
+                "kdeconnect.runcommand".to_string(),
             ],
             outgoing_capabilities: vec![
                 "kdeconnect.runcommand".to_string(),
@@ -158,6 +159,7 @@ impl PhoneService {
                 "kdeconnect.shareinputdevices.request".to_string(),
                 "kdeconnect.systemvolume.request".to_string(),
                 "glide.files".to_string(),
+                "kdeconnect.runcommand.request".to_string(),
             ],
         }
     }
@@ -345,6 +347,11 @@ impl PhoneService {
             .iter()
             .any(|c| c == crate::plugins::systemvolume::PACKET_TYPE_SYSTEMVOLUME_REQUEST);
         mgr.remember_volume_receiver(&identity.device_id, takes_volume);
+        let runs_actions = identity
+            .incoming_capabilities
+            .iter()
+            .any(|c| c == crate::plugins::runcommand::PACKET_TYPE_RUNCOMMAND_REQUEST);
+        mgr.remember_action_receiver(&identity.device_id, runs_actions);
         mgr.send_pending_pair_request(&identity.device_id);
         let device = mgr.devices.get(&identity.device_id)?;
         Some((device.pair_state == PairState::Paired, device.name.clone()))

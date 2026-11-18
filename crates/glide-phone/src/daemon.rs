@@ -130,6 +130,15 @@ impl PhoneDaemon {
     }
 
     /// The phones' media players: `{device id: {player: state}}`.
+    /// The phones' own actions (Glide only): `{device id: [{key, name}]}`.
+    pub async fn list_phone_actions_json(&self) -> String {
+        serde_json::to_string(&self.manager.lock().await.phone_actions).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub async fn run_phone_action(&self, device_id: &str, key: &str) -> bool {
+        self.manager.lock().await.run_phone_action(device_id, key).is_ok()
+    }
+
     /// Whether new screenshots go to the phones (Glide only).
     pub async fn send_screenshots(&self) -> bool {
         self.manager.lock().await.send_screenshots()

@@ -116,6 +116,10 @@ pub struct PhoneManager {
     files_allowed_path: Option<std::path::PathBuf>,
     /// Phones whose volume this computer may set (their identity accepts systemvolume.request).
     volume_receivers: std::collections::HashSet<String>,
+    /// The phones' own actions this computer can run (Glide only), by device.
+    pub phone_actions: HashMap<String, Vec<crate::plugins::runcommand::PhoneAction>>,
+    /// Phones that run actions for this computer (their identity accepts runcommand.request).
+    action_receivers: std::collections::HashSet<String>,
     /// Set when a phone asked to set commands up here; the window opens that section.
     pub commands_setup_requested: bool,
     pub notify: Arc<Notify>,
@@ -179,6 +183,8 @@ impl PhoneManager {
             phone_media: HashMap::new(),
             phone_volumes: HashMap::new(),
             volume_receivers: std::collections::HashSet::new(),
+            phone_actions: HashMap::new(),
+            action_receivers: std::collections::HashSet::new(),
             local: LocalSettings {
                 files_allowed: files_allowed_path
                     .as_ref()
@@ -360,6 +366,25 @@ impl PhoneManager {
         } else {
             self.send_to_device(device_id, computer_files::listing(&root, &path));
         }
+    }
+
+    /// Remembers whether a phone runs actions for this computer (its identity says so).
+    pub fn remember_action_receiver(&mut self, device_id: &str, accepts: bool) {
+        if accepts {
+            self.action_receivers.insert(device_id.to_string());
+        } else {
+            self.action_receivers.remove(device_id);
+        }
+    }
+
+    /// Runs one of the phone's actions (lock, torch, ...).
+    pub fn run_phone_action(&self, device_id: &str, key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reachable(device_id)?;
+        if !self.phone_actions.get(device_id).is_some_and(|actions| actions.iter().any(|a| a.key == key)) {
+            return Err("the phone has no such action".into());
+        }
+        self.send_to_device(device_id, crate::plugins::runcommand::phone_run_request(key));
+        Ok(())
     }
 
     /// Remembers whether this computer may set a phone's volumes (its identity says so).
@@ -589,6 +614,9 @@ impl PhoneManager {
         if self.volume_receivers.contains(device_id) {
             self.send_to_device(device_id, crate::plugins::phone_volume::request_packet());
         }
+        if self.action_receivers.contains(device_id) {
+            self.send_to_device(device_id, crate::plugins::runcommand::phone_list_request());
+        }
         if let Some(sender) = self.senders.get(device_id) {
             Self::greet_async(sender.clone());
         }
@@ -732,6 +760,7 @@ impl PhoneManager {
         self.connecting.remove(device_id);
         self.phone_media.remove(device_id);
         self.phone_volumes.remove(device_id);
+        self.phone_actions.remove(device_id);
         if self.share_input.target.as_deref() == Some(device_id) {
             self.end_share_input(); // a phone that went away can't give the cursor back
         }
@@ -984,6 +1013,13 @@ impl PhoneManager {
     /// Drawing tablet, keyboard state and share batch updates.
     fn handle_input_packet(&mut self, device_id: &str, packet: &NetworkPacket) -> bool {
         match packet.packet_type.as_str() {
+            crate::plugins::runcommand::PACKET_TYPE_RUNCOMMAND => {
+                if let Some(actions) = crate::plugins::runcommand::parse_phone_actions(&packet.body) {
+                    self.phone_actions.insert(device_id.to_string(), actions);
+                    self.notify.notify_waiters();
+                }
+                true
+            }
             crate::plugins::computer_files::PACKET_TYPE_FILES_REQUEST => {
                 let body = packet.body.clone();
                 self.handle_files_request(device_id, &body);

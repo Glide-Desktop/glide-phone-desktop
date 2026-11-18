@@ -169,6 +169,47 @@ const MAX_RUNNING: usize = 8;
 const MAX_LINES: usize = 5000;
 const MAX_LINE_BYTES: usize = 4096;
 
+/// Glide only: the phone's own actions, which this computer can run (lock, torch, ...). The
+/// phone offers them with these same packets the other way round.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PhoneAction {
+    pub key: String,
+    pub name: String,
+}
+
+/// The phone's `kdeconnect.runcommand` list (`commandList` is a JSON string, as KDE sends it).
+#[must_use]
+pub fn parse_phone_actions(body: &serde_json::Value) -> Option<Vec<PhoneAction>> {
+    let list = body.get("commandList")?;
+    let parsed: serde_json::Value = match list {
+        serde_json::Value::String(text) if text.len() <= 64 * 1024 => serde_json::from_str(text).ok()?,
+        serde_json::Value::Object(_) => list.clone(),
+        _ => return None,
+    };
+    let mut actions: Vec<PhoneAction> = parsed
+        .as_object()?
+        .iter()
+        .filter(|(key, _)| !key.is_empty() && key.len() <= 64)
+        .filter_map(|(key, entry)| {
+            let name: String = entry.get("name")?.as_str()?.chars().filter(|c| !c.is_control()).take(80).collect();
+            Some(PhoneAction { key: key.clone(), name })
+        })
+        .take(32)
+        .collect();
+    actions.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(actions)
+}
+
+#[must_use]
+pub fn phone_list_request() -> NetworkPacket {
+    NetworkPacket::new(PACKET_TYPE_RUNCOMMAND_REQUEST, json!({ "requestCommandList": true }))
+}
+
+#[must_use]
+pub fn phone_run_request(key: &str) -> NetworkPacket {
+    NetworkPacket::new(PACKET_TYPE_RUNCOMMAND_REQUEST, json!({ "key": key }))
+}
+
 /// Forwards each output line as its own `commandOutput` packet.
 async fn pump<R: tokio::io::AsyncRead + Unpin>(
     lines: Option<tokio::io::Lines<BufReader<R>>>, sender: Option<PacketSender>, id: u32, stream: &str,

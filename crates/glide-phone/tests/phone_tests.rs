@@ -1825,3 +1825,31 @@ async fn screenshots_taken_here_go_to_the_phone_when_wanted() {
     assert!(offer.body["filename"].as_str().unwrap().starts_with("glide-screenshot-"));
     let _ = std::fs::remove_file(&shot);
 }
+
+/// Glide only: the computer lists the phone's own actions and runs one.
+#[test]
+fn the_computer_runs_the_phones_actions() {
+    use glide_phone::config::PairedDevice;
+    let cert = IdentityCert::generate("local_1234567890123456789012345678").expect("cert");
+    let paired = PairedDevice { id: "pinned".into(), name: "Pixel".into(), fingerprint: "AA".into() };
+    let mut manager = PhoneManager::new(local_config(&cert, vec![paired]), cert);
+    let (sender, mut sent) = tokio::sync::mpsc::unbounded_channel();
+    manager.register_connection("pinned".to_string(), sender, Some("AA".to_string()));
+    manager.remember_action_receiver("pinned", true);
+    let mut drain = || std::iter::from_fn(|| sent.try_recv().ok()).collect::<Vec<_>>();
+    drain();
+    manager.greet("pinned");
+    assert!(
+        drain()
+            .iter()
+            .any(|p| p.packet_type == "kdeconnect.runcommand.request" && p.body["requestCommandList"] == true)
+    );
+    let list = json!({ "lock": { "name": "Заблокувати телефон", "command": "lock" }, "torch": { "name": "Ліхтарик", "command": "torch" } });
+    let packet =
+        NetworkPacket::new("kdeconnect.runcommand", json!({ "commandList": list.to_string(), "canAddCommand": false }));
+    manager.handle_packet("pinned", &packet).expect("handled");
+    assert_eq!(manager.phone_actions["pinned"].len(), 2);
+    manager.run_phone_action("pinned", "torch").expect("run");
+    assert_eq!(drain()[0].body, json!({ "key": "torch" }));
+    assert!(manager.run_phone_action("pinned", "rm -rf").is_err(), "only actions the phone offered");
+}

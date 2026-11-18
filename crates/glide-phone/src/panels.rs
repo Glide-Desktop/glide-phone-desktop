@@ -11,6 +11,7 @@ use crate::ui::{Message, global_manager, proxy};
 
 pub type PhoneMedia = std::collections::HashMap<String, BTreeMap<String, crate::plugins::remote_media::RemotePlayer>>;
 pub type PhoneVolumes = std::collections::HashMap<String, Vec<crate::plugins::phone_volume::PhoneSink>>;
+pub type PhoneActions = std::collections::HashMap<String, Vec<crate::plugins::runcommand::PhoneAction>>;
 
 /// State of the feature sections.
 #[derive(Debug, Default)]
@@ -18,6 +19,7 @@ pub struct Panels {
     pub commands: Vec<CommandRow>,
     pub phone_media: PhoneMedia,
     pub phone_volumes: PhoneVolumes,
+    pub phone_actions: PhoneActions,
     pub device_names: std::collections::HashMap<String, String>,
     /// Paired phones that are connected now.
     pub reachable: Vec<String>,
@@ -79,6 +81,8 @@ pub enum PanelMessage {
     /// (device, stream, volume 0..=max) — the phone's own volume (Glide only).
     PhoneVolume(String, String, f32),
     PhoneMute(String, String, bool),
+    /// (device, action key): run one of the phone's actions (Glide only).
+    PhoneAction(String, String),
 }
 
 impl Panels {
@@ -266,6 +270,15 @@ impl Panels {
                     }
                 }
             }
+            PanelMessage::PhoneAction(device, key) => {
+                if let Some(proxy) = proxy() {
+                    let _ = proxy.run_phone_action(&device, &key);
+                } else if let Some(manager) = global_manager()
+                    && let Ok(guard) = manager.try_lock()
+                {
+                    let _ = guard.run_phone_action(&device, &key);
+                }
+            }
             PanelMessage::PhoneMute(device, name, muted) => {
                 if let Some(sink) =
                     self.phone_volumes.get_mut(&device).and_then(|s| s.iter_mut().find(|s| s.name == name))
@@ -298,6 +311,9 @@ impl Panels {
     #[must_use]
     pub fn view<'a>(&'a self, shell: &'a Shell<Message>) -> Vec<Element<'a, Message>> {
         let mut sections = Vec::new();
+        if self.phone_actions.values().any(|actions| !actions.is_empty()) {
+            sections.push(phone_actions_group(self, shell));
+        }
         if self.phone_volumes.values().any(|sinks| !sinks.is_empty()) {
             sections.push(phone_volume_group(self, shell));
         }
@@ -489,6 +505,25 @@ fn commands_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<
 }
 
 /// Players running on the phone, with their controls (KDE Connect's media remote).
+/// The phone's own actions, run from here (Glide only).
+fn phone_actions_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
+    let paint = shell.paint();
+    let mut group = widget::Group::new(paint).title(shell.t("Дії телефону", "Phone actions"));
+    for (device, actions) in &panels.phone_actions {
+        let mut buttons = row![].spacing(8);
+        for action in actions {
+            buttons = buttons.push(widget::compact_button(
+                paint,
+                &action.name,
+                Tone::Neutral,
+                Some(Message::Panel(PanelMessage::PhoneAction(device.clone(), action.key.clone()))),
+            ));
+        }
+        group = group.push(buttons.wrap());
+    }
+    group.into()
+}
+
 /// The phone's own volumes, set from here (Glide only).
 fn phone_volume_group<'a>(panels: &'a Panels, shell: &'a Shell<Message>) -> Element<'a, Message> {
     let paint = shell.paint();
