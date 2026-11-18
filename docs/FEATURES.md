@@ -25,7 +25,7 @@ column says why the other doesn't exist (in KDE Connect either).
 | Share input devices (cursor across the screen edge) | ✓ takes the cursor, hands it back at its edge | ✓ the cursor and keyboard go over at the chosen edge (layer-shell strip + pointer lock; Ctrl+Alt+Esc takes it back) | computer → phone: the phone has no mouse to send over (it drives the computer as a touchpad instead) | `kdeconnect.shareinputdevices*` |
 | Presenter (pointer, slides, volume keys) | ✓ the remote | ✓ moves slides / shows the pointer | phone → computer: the phone is the hand-held remote | `kdeconnect.presenter` |
 | Drawing tablet | ✓ the pen surface | ✓ virtual tablet | phone → computer: the touchscreen is the pen surface | `kdeconnect.digitizer(.session)` |
-| Run commands (+ live output, widget, device controls) | ✓ lists and runs, shows output | ✓ keeps commands, runs them, streams output | phone → computer: Android has no shell commands to run | `kdeconnect.runcommand*` |
+| Run commands (+ live output, widget, device controls) | ✓ runs the computer's commands, shows output; **offers its own actions** (lock, screenshot, notifications, torch, vibrate / sound; Glide only) | ✓ keeps commands, runs them, streams output; **runs the phone's actions** from the window (Glide only) | both ways | `kdeconnect.runcommand*` |
 | Telephony (calls, mute, pause media) | ✓ reports calls, mutes on request | ✓ shows calls, mutes the ringer, pauses media | both ends; calls only happen on the phone | `kdeconnect.telephony*` |
 | Connectivity (signal per SIM) | ✓ reports | ✓ shows | phone → computer: the computer has no SIM | `kdeconnect.connectivity_report` |
 | Contacts | ✓ sends its address book | ✓ keeps it (`~/.local/share/kpeoplevcard`), names callers and SMS | phone → computer: the address book lives on the phone | `kdeconnect.contacts.*` |
@@ -64,7 +64,8 @@ repo; fresh install on an emulator, private D-Bus session): pairing from the app
 the code confirmed on both sides, a battery change, a contact's picture arriving as the
 notification icon (not the app's), the phone's volume set from the computer and its volume button
 seen on the computer, the phone browsing this computer's files (refused while off) and
-downloading one, a screenshot taken here reaching the phone, and this computer's cursor going over
+downloading one, a screenshot taken here reaching the phone, the phone's actions run from here
+(vibrate and sound change its ringer mode), and this computer's cursor going over
 to the phone at the right edge, moving the phone's cursor and coming back at the phone's edge. Found and fixed: every trusted
 link closing on a `DevicePlugin` NullPointerException (phone), flat avatars taken for app glyphs
 (desktop).
